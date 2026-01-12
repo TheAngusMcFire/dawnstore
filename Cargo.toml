@@ -1,0 +1,17 @@
+[workspace]
+
+resolver = "2"
+
+members = ["dawnstore-core"]
+
+[workspace.dependencies]
+tokio = { version = "1.49.0" }
+axum = { version = "0.8" }
+tracing = { version = "0" }
+schemars = { version = "1.2.0" }
+jsonschema = { version = "0.38" }
+sqlx = { version = "0.8", features = [
+  "postgres",
+  "runtime-tokio",
+  "tls-rustls-ring-webpki",
+]}

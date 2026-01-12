@@ -1,0 +1,19 @@
+[package]
+name = "dawnstore-core"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+default = ["postgres"]
+postgres = ["dep:sqlx"]
+etcd = []
+
+[dependencies]
+axum.workspace = true
+tracing.workspace = true
+schemars.workspace = true
+jsonschema.workspace = true
+sqlx = { workspace = true, optional = true }
+
+[dev-dependencies]
+tracing-subscriber = { version = "0.3" }
