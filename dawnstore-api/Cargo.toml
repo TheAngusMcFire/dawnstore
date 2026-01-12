@@ -4,3 +4,11 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+serde.workspace = true
+axum.workspace = true
+tracing.workspace = true
+tracing-subscriber = { version = "0" }
+tokio.workspace = true
+sqlx.workspace = true
+color-eyre = "0.6.5"
+dawnstore-core = { path = "../dawnstore-core" }

@@ -9,7 +9,11 @@ postgres = ["dep:sqlx"]
 etcd = []
 
 [dependencies]
-axum.workspace = true
+# axum.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 tracing.workspace = true
 schemars.workspace = true
 jsonschema.workspace = true
