@@ -2,7 +2,7 @@
 
 resolver = "2"
 
-members = ["dawnstore-core"]
+members = ["dawnstore-api","dawnstore-core"]
 
 [workspace.dependencies]
 tokio = { version = "1.49.0" }
