@@ -53,7 +53,7 @@ impl PostgresBackend {
         }
 
         let mut schema_cache = self.schema_cache.read().await;
-        let mut data_base_object = Vec::<Object>::new();
+        let mut database_object = Vec::<Object>::new();
         for obj in &input_objects {
             let Some(api_version) = &obj.api_version else {
                 return Err(DawnStoreError::ApiVersionMissingInObject);
@@ -62,8 +62,8 @@ impl PostgresBackend {
                 return Err(DawnStoreError::KindMissingInObject);
             };
             let object_id = ObjectId {
-                kind: kind.to_string(),
-                api_version: api_version.to_string(),
+                kind: kind.clone(),
+                api_version: api_version.clone(),
             };
             let validator = match schema_cache.get(&object_id) {
                 Some(x) => x,
@@ -73,8 +73,8 @@ impl PostgresBackend {
                         queries::get_object_schema(&self.pool, api_version, kind).await?
                     else {
                         return Err(DawnStoreError::NoSchemaForObjectFound {
-                            api_version: api_version.to_string(),
-                            kind: kind.to_string(),
+                            api_version: api_version.clone(),
+                            kind: kind.clone(),
                         });
                     };
                     let validator =
