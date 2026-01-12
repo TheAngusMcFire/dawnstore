@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use axum::{
-    Router,
+    Json, Router,
     extract::{Query, State},
     response::IntoResponse,
     routing::{delete, get, post},
@@ -45,7 +45,11 @@ struct ListObject {
     pub page: Option<usize>,
     pub page_size: Option<usize>,
 }
-async fn list(State(state): State<ApiState>, Query(query): Query<ListObject>) -> impl IntoResponse {
+async fn list(
+    State(state): State<ApiState>,
+    Query(query): Query<ListObject>,
+    Json(obj): Json<serde_json::Value>,
+) -> impl IntoResponse {
 }
 
 #[derive(Deserialize)]
