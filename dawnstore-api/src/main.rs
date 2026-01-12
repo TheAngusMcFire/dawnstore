@@ -14,9 +14,9 @@ use tokio::net::TcpListener;
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
     tracing_subscriber::fmt().init();
-    let connection_string = std::env::var("CONNECTION_STRING")?;
+    let connection_string = std::env::var("DATABASE_URL")?;
     let pool = Arc::new(PgPool::connect(&connection_string).await?);
-    dawnstore_core::backends::postgres::sqlx_migrate(pool.as_ref()).await?;
+    // dawnstore_core::backends::postgres::sqlx_migrate(pool.as_ref()).await?;
 
     let app = Router::new()
         .route("/apply", post(apply))
