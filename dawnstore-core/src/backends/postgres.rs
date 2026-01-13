@@ -1,5 +1,7 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
+use chrono::Utc;
+use jsonschema::ValidationError;
 use serde_json::Value;
 use sqlx::{Pool, Postgres, migrate::MigrateError};
 use tokio::sync::RwLock;
@@ -53,8 +55,9 @@ impl PostgresBackend {
         }
 
         let mut schema_cache = self.schema_cache.read().await;
-        let mut database_object = Vec::<Object>::new();
-        for obj in &input_objects {
+        let mut string_ids = Vec::<String>::with_capacity(input_objects.len());
+        let mut input_objects_with_string_id = Vec::<(String, ObjectAny)>::new();
+        for obj in input_objects {
             let Some(api_version) = &obj.api_version else {
                 return Err(DawnStoreError::ApiVersionMissingInObject);
             };
@@ -92,7 +95,65 @@ impl PostgresBackend {
                 }
             };
             if let Err(e) = validator.validate(&obj.spec) {
-                todo!("throw validation error")
+                return Err(DawnStoreError::ObjectValidationError {
+                    api_version: api_version.clone(),
+                    kind: kind.clone(),
+                    name: obj.name.clone(),
+                    validation_error: e.to_owned(),
+                });
+            }
+            let string_id = format!(
+                "{}/{}/{}",
+                if let Some(x) = &obj.namespace {
+                    x.as_str()
+                } else {
+                    "default"
+                },
+                kind,
+                obj.name,
+            );
+            // todo extract foreign keys from the spec and add to vector
+            string_ids.push(string_id.clone());
+            input_objects_with_string_id.push((string_id, obj));
+        }
+
+        let mut database_objects_to_create =
+            Vec::<Object>::with_capacity(input_objects_with_string_id.len());
+        let mut database_objects_to_update =
+            Vec::<Object>::with_capacity(input_objects_with_string_id.len());
+
+        let mut trans = self.pool.begin().await?;
+        let object_infos = queries::get_object_infos(trans.as_mut(), string_ids.as_slice()).await?;
+        let object_infos = object_infos
+            .iter()
+            .map(|x| (&x.string_id, (&x.id, &x.created_at)))
+            .collect::<BTreeMap<_, _>>();
+
+        for (string_id, obj) in input_objects_with_string_id {
+            let oi = object_infos.get(&string_id);
+            let (id, created_at) = match &oi {
+                Some((id, created_at)) => (**id, **created_at),
+                None => (uuid::Uuid::new_v4(), Utc::now()),
+            };
+            let new_obj = Object {
+                id,
+                string_id,
+                api_version: obj.api_version.unwrap(),
+                name: obj.name,
+                kind: obj.kind.unwrap(),
+                created_at,
+                updated_at: Utc::now(),
+                namespace: obj.namespace,
+                annotations: sqlx::types::Json(obj.annotations.unwrap_or_default()),
+                labels: sqlx::types::Json(obj.labels.unwrap_or_default()),
+                // todo add the owner references
+                owners: Default::default(),
+                spec: sqlx::types::Json(obj.spec),
+            };
+            if oi.is_some() {
+                database_objects_to_update.push(new_obj);
+            } else {
+                database_objects_to_create.push(new_obj);
             }
         }
 

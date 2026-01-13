@@ -1,4 +1,6 @@
-use crate::backends::postgres::data_models::{ForeignKeyConstraint, Object, ObjectSchema};
+use sqlx::PgConnection;
+
+use crate::backends::postgres::data_models::{ForeignKeyConstraint, Object, ObjectInfo, ObjectSchema};
 
 // foreign key constraint
 pub async fn insert_foreign_key_constraint(pool: &sqlx::PgPool, item: &ForeignKeyConstraint) -> Result<(), sqlx::Error> {
@@ -152,8 +154,14 @@ pub async fn insert_multiple_objects(pool: &sqlx::PgPool, items: &[Object]) -> R
 }
 
 pub async fn get_object(pool: &sqlx::PgPool, id: uuid::Uuid) -> Result<Option<Object>, sqlx::Error> {
-    sqlx::query_as!(Object, "SELECT id, api_version, name, kind, created_at, updated_at, namespace, annotations as \"annotations: _\", labels as \"labels: _\", owners, spec as \"spec: _\" FROM objects WHERE id = $1", id)
+    sqlx::query_as!(Object, "SELECT id, string_id, api_version, name, kind, created_at, updated_at, namespace, annotations as \"annotations: _\", labels as \"labels: _\", owners, spec as \"spec: _\" FROM objects WHERE id = $1", id)
         .fetch_optional(pool)
+        .await
+}
+
+pub async fn get_object_infos(pool: &mut PgConnection, string_ids: &[String]) -> Result<Vec<ObjectInfo>, sqlx::Error> {
+    sqlx::query_as!(ObjectInfo, "SELECT id, string_id, created_at FROM objects WHERE string_id = ANY($1)", string_ids)
+        .fetch_all(pool)
         .await
 }
 

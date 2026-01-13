@@ -19,6 +19,7 @@ CREATE UNIQUE INDEX idx_object_schemas_lookup ON object_schemas (api_version, ki
 
 CREATE TABLE objects (
     id UUID PRIMARY KEY,
+    string_id TEXT NOT NULL,
     api_version TEXT NOT NULL,
     name TEXT NOT NULL,
     kind TEXT NOT NULL,
@@ -31,5 +32,6 @@ CREATE TABLE objects (
     spec JSONB NOT NULL
 );
 
-CREATE INDEX idx_objects_lookup ON objects (namespace, api_version, kind, name);
+CREATE INDEX idx_objects_string_id_lookup ON objects (string_id);
+CREATE INDEX idx_objects_lookup ON objects (namespace, kind, name);
 CREATE INDEX idx_objects_labels ON objects USING GIN (labels);

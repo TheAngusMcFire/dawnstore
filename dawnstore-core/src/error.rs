@@ -19,6 +19,13 @@ pub enum DawnStoreError {
     NoSchemaForObjectFound { api_version: String, kind: String },
     #[error("Database Error: {0}")]
     DatabaseError(#[from] sqlx::Error),
-    #[error("Error during jsonshema creation")]
+    #[error("Error during jsonshema creation: {0}")]
     JsonShemaValidatorCreationError(#[from] ValidationError<'static>),
+    #[error("Error during jsonshema creation of {api_version}/{kind}/{name}: {validation_error}")]
+    ObjectValidationError {
+        api_version: String,
+        kind: String,
+        name: String,
+        validation_error: ValidationError<'static>,
+    },
 }

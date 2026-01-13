@@ -26,6 +26,7 @@ pub struct ObjectSchema {
 #[derive(FromRow, serde::Serialize, serde::Deserialize)]
 pub struct Object {
     pub id: Uuid,
+    pub string_id: String,
     pub api_version: String,
     pub name: String,
     pub kind: String,
@@ -36,4 +37,11 @@ pub struct Object {
     pub labels: Json<BTreeMap<String, String>>,
     pub owners: Vec<Uuid>,
     pub spec: Json<serde_json::Value>,
+}
+
+#[derive(FromRow, serde::Serialize, serde::Deserialize)]
+pub struct ObjectInfo {
+    pub id: Uuid,
+    pub string_id: String,
+    pub created_at: DateTime<Utc>,
 }
