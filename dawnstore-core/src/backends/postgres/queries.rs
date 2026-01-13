@@ -132,12 +132,13 @@ pub async fn insert_object(pool: &sqlx::PgPool, item: &Object) -> Result<(), sql
     Ok(())
 }
 
-pub async fn insert_multiple_objects(pool: &sqlx::PgPool, items: &[Object]) -> Result<(), sqlx::Error> {
+pub async fn insert_multiple_objects(pool: &mut PgConnection, items: &[Object]) -> Result<(), sqlx::Error> {
     let mut query_builder: sqlx::QueryBuilder<sqlx::Postgres> = sqlx::QueryBuilder::new(
-        "INSERT INTO objects (id, api_version, name, kind, created_at, updated_at, namespace, annotations, labels, owners, spec) "
+        "INSERT INTO objects (id, string_id, api_version, name, kind, created_at, updated_at, namespace, annotations, labels, owners, spec) "
     );
     query_builder.push_values(items, |mut b, item| {
         b.push_bind(item.id)
+            .push_bind(&item.string_id)
             .push_bind(&item.api_version)
             .push_bind(&item.name)
             .push_bind(&item.kind)
@@ -150,6 +151,86 @@ pub async fn insert_multiple_objects(pool: &sqlx::PgPool, items: &[Object]) -> R
             .push_bind(&item.spec.0);
     });
     query_builder.build().execute(pool).await?;
+    Ok(())
+}
+
+pub async fn insert_or_update_multiple_objects(pool: &mut PgConnection, items: &[Object]) -> Result<(), sqlx::Error> {
+    let mut query_builder: sqlx::QueryBuilder<sqlx::Postgres> = sqlx::QueryBuilder::new(
+        "INSERT INTO objects (id, string_id, api_version, name, kind, created_at, updated_at, namespace, annotations, labels, owners, spec) "
+    );
+
+    query_builder.push_values(items, |mut b, item| {
+        b.push_bind(item.id)
+            .push_bind(&item.string_id)
+            .push_bind(&item.api_version)
+            .push_bind(&item.name)
+            .push_bind(&item.kind)
+            .push_bind(item.created_at)
+            .push_bind(item.updated_at)
+            .push_bind(&item.namespace)
+            .push_bind(serde_json::to_value(&item.annotations).unwrap())
+            .push_bind(serde_json::to_value(&item.labels).unwrap())
+            .push_bind(&item.owners)
+            .push_bind(&item.spec.0);
+    });
+
+    query_builder.push(
+        " ON CONFLICT (id) DO UPDATE SET "
+    );
+
+    query_builder.push("updated_at = EXCLUDED.updated_at, ");
+    query_builder.push("annotations = EXCLUDED.annotations, ");
+    query_builder.push("labels = EXCLUDED.labels, ");
+    query_builder.push("owners = EXCLUDED.owners, ");
+    query_builder.push("spec = EXCLUDED.spec");
+
+    let query = query_builder.build();
+    query.execute(pool).await?;
+
+    Ok(())
+}
+
+pub async fn update_multiple_objects(pool: &mut PgConnection, items: &[Object]) -> Result<(), sqlx::Error> {
+    if items.is_empty() {
+        return Ok(());
+    }
+
+    let mut query_builder: sqlx::QueryBuilder<sqlx::Postgres> = sqlx::QueryBuilder::new(
+        "UPDATE objects AS o SET 
+            string_id = v.string_id,
+            api_version = v.api_version,
+            name = v.name,
+            kind = v.kind,
+            updated_at = v.updated_at,
+            namespace = v.namespace,
+            annotations = v.annotations,
+            labels = v.labels,
+            owners = v.owners,
+            spec = v.spec
+        FROM ( "
+    );
+
+    query_builder.push_values(items, |mut b, item| {
+        b.push_bind(item.id)
+            .push_bind(&item.string_id)
+            .push_bind(&item.api_version)
+            .push_bind(&item.name)
+            .push_bind(&item.kind)
+            .push_bind(item.updated_at)
+            .push_bind(&item.namespace)
+            .push_bind(serde_json::to_value(&item.annotations).unwrap())
+            .push_bind(serde_json::to_value(&item.labels).unwrap())
+            .push_bind(&item.owners)
+            .push_bind(&item.spec.0);
+    });
+
+    query_builder.push(
+        ") AS v(id, string_id, api_version, name, kind, updated_at, namespace, annotations, labels, owners, spec) 
+         WHERE o.id = v.id"
+    );
+
+    query_builder.build().execute(pool).await?;
+
     Ok(())
 }
 

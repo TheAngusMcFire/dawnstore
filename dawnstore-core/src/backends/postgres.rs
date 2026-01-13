@@ -9,7 +9,7 @@ use tokio::sync::RwLock;
 use crate::{
     backends::postgres::data_models::Object,
     error::DawnStoreError,
-    models::{ObjectAny, ObjectId, ReturnObject},
+    models::{ObjectAny, ObjectId, ReturnAny, ReturnObject},
 };
 
 mod data_models;
@@ -117,10 +117,7 @@ impl PostgresBackend {
             input_objects_with_string_id.push((string_id, obj));
         }
 
-        let mut database_objects_to_create =
-            Vec::<Object>::with_capacity(input_objects_with_string_id.len());
-        let mut database_objects_to_update =
-            Vec::<Object>::with_capacity(input_objects_with_string_id.len());
+        let mut database_objects = Vec::<Object>::with_capacity(input_objects_with_string_id.len());
 
         let mut trans = self.pool.begin().await?;
         let object_infos = queries::get_object_infos(trans.as_mut(), string_ids.as_slice()).await?;
@@ -150,13 +147,28 @@ impl PostgresBackend {
                 owners: Default::default(),
                 spec: sqlx::types::Json(obj.spec),
             };
-            if oi.is_some() {
-                database_objects_to_update.push(new_obj);
-            } else {
-                database_objects_to_create.push(new_obj);
-            }
+            database_objects.push(new_obj);
         }
 
-        todo!()
+        queries::insert_or_update_multiple_objects(trans.as_mut(), &database_objects).await?;
+        trans.commit().await?;
+
+        Ok(database_objects
+            .into_iter()
+            .map(|x| ReturnAny {
+                id: x.id,
+                namespace: x.namespace.unwrap_or_else(|| "default".to_string()),
+                api_version: x.api_version,
+                kind: x.kind,
+                name: x.name,
+                created_at: x.created_at,
+                updated_at: x.updated_at,
+                annotations: Some(x.annotations.0),
+                labels: Some(x.labels.0),
+                // todo set the owners
+                owners: Some(Default::default()),
+                spec: x.spec.0,
+            })
+            .collect())
     }
 }
