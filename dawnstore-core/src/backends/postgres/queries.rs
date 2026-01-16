@@ -1,6 +1,6 @@
 use sqlx::PgConnection;
 
-use crate::backends::postgres::data_models::{ForeignKeyConstraint, Object, ObjectInfo, ObjectSchema};
+use crate::{backends::postgres::data_models::{ForeignKeyConstraint, Object, ObjectInfo, ObjectSchema}, models::ListObjectsFilter};
 
 // foreign key constraint
 pub async fn insert_foreign_key_constraint(pool: &sqlx::PgPool, item: &ForeignKeyConstraint) -> Result<(), sqlx::Error> {
@@ -244,6 +244,43 @@ pub async fn get_object(pool: &sqlx::PgPool, id: uuid::Uuid) -> Result<Option<Ob
     sqlx::query_as!(Object, "SELECT id, string_id, api_version, name, kind, created_at, updated_at, namespace, annotations as \"annotations: _\", labels as \"labels: _\", owners, spec as \"spec: _\" FROM objects WHERE id = $1", id)
         .fetch_optional(pool)
         .await
+}
+
+pub async fn get_objects_by_filter(pool: &sqlx::PgPool, filter: &ListObjectsFilter) -> Result<Vec<Object>, sqlx::Error> {
+    let mut query_builder: sqlx::QueryBuilder<sqlx::Postgres> = sqlx::QueryBuilder::new(
+        "SELECT id, string_id, api_version, name, kind, created_at, updated_at, namespace, annotations, labels, owners, spec FROM objects where true "
+    );
+
+    if let Some(x) = &filter.namespace {
+        query_builder.push("and namespace =");
+        query_builder.push_bind(x);
+    }
+
+    if let Some(x) = &filter.kind {
+        query_builder.push("and kind =");
+        query_builder.push_bind(x);
+    }
+
+    if let Some(x) = &filter.name {
+        query_builder.push("and name =");
+        query_builder.push_bind(x);
+    }
+
+    query_builder.push(" order by kind, name");
+
+    if let Some(x) = &filter.page_size {
+        let size = (*x).min(250);
+        query_builder.push(" limit ");
+        query_builder.push_bind(size as i64);
+    }
+
+    if let Some(x) = &filter.page {
+        let size = filter.page_size.unwrap_or(250);
+        query_builder.push(" offset ");
+        query_builder.push_bind((x * size) as i64);
+    }
+    dbg!(query_builder.sql());
+    query_builder.build_query_as::<Object>().fetch_all(pool).await
 }
 
 pub async fn get_object_infos(pool: &mut PgConnection, string_ids: &[String]) -> Result<Vec<ObjectInfo>, sqlx::Error> {

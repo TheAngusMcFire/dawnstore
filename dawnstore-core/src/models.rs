@@ -65,10 +65,26 @@ pub struct ReturnObject<T> {
     pub spec: T,
 }
 
+#[derive(serde::Deserialize, Debug)]
+pub struct ListObjectsFilter {
+    pub namespace: Option<String>,
+    pub kind: Option<String>,
+    pub name: Option<String>,
+    pub page: Option<usize>,
+    pub page_size: Option<usize>,
+}
+
 pub struct ListOfObjects {
     /// should always be list
     pub kind: String,
     pub object_kind: Option<String>,
     pub object_api_version: Option<String>,
     pub list: Vec<ObjectAny>,
+}
+
+#[derive(serde::Deserialize)]
+pub struct DeleteObject {
+    pub namespace: Option<String>,
+    pub kind: String,
+    pub name: String,
 }

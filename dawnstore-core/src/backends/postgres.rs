@@ -9,7 +9,7 @@ use uuid::Uuid;
 use crate::{
     backends::postgres::data_models::{Object, ObjectSchema},
     error::DawnStoreError,
-    models::{ObjectAny, ObjectId, ReturnAny, ReturnObject},
+    models::{ListObjectsFilter, ObjectAny, ObjectId, ReturnAny, ReturnObject},
 };
 
 mod data_models;
@@ -57,6 +57,30 @@ impl PostgresBackend {
 
     pub async fn sqlx_migrate(&self) -> Result<(), MigrateError> {
         sqlx::migrate!("./migrations").run(&self.pool).await
+    }
+
+    pub async fn list(
+        &self,
+        filter: &ListObjectsFilter,
+    ) -> Result<Vec<ReturnObject<serde_json::Value>>, DawnStoreError> {
+        let objs = queries::get_objects_by_filter(&self.pool, filter).await?;
+        Ok(objs
+            .into_iter()
+            .map(|x| ReturnAny {
+                id: x.id,
+                namespace: x.namespace.unwrap_or_else(|| "default".to_string()),
+                api_version: x.api_version,
+                kind: x.kind,
+                name: x.name,
+                created_at: x.created_at,
+                updated_at: x.updated_at,
+                annotations: Some(x.annotations.0),
+                labels: Some(x.labels.0),
+                // todo set the owners
+                owners: Some(Default::default()),
+                spec: x.spec.0,
+            })
+            .collect())
     }
 
     pub async fn apply_raw(

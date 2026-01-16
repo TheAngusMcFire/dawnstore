@@ -7,7 +7,10 @@ use axum::{
     routing::{delete, get, post},
 };
 use color_eyre::eyre;
-use dawnstore_core::{backends::postgres::PostgresBackend, models::EmptyObject};
+use dawnstore_core::{
+    backends::postgres::PostgresBackend,
+    models::{DeleteObject, EmptyObject, ListObjectsFilter},
+};
 use serde::Deserialize;
 use sqlx::PgPool;
 use tokio::net::TcpListener;
@@ -48,23 +51,14 @@ async fn apply(State(state): State<ApiState>, Json(obj): Json<serde_json::Value>
     }
 }
 
-#[derive(Deserialize)]
-struct ListObject {
-    pub namespace: Option<String>,
-    pub kind: String,
-    pub name: Option<String>,
-    pub page: Option<usize>,
-    pub page_size: Option<usize>,
-}
-async fn list(State(state): State<ApiState>, Query(query): Query<ListObject>) -> impl IntoResponse {
+async fn list(State(state): State<ApiState>, Query(query): Query<ListObjectsFilter>) -> Response {
+    dbg!(&query);
+    match state.backend.list(&query).await {
+        Ok(x) => Json(x).into_response(),
+        Err(y) => format!("{y:?}").into_response(),
+    }
 }
 
-#[derive(Deserialize)]
-struct DeleteObject {
-    pub namespace: Option<String>,
-    pub kind: String,
-    pub name: String,
-}
 async fn delete_object(
     State(state): State<ApiState>,
     Query(query): Query<DeleteObject>,
