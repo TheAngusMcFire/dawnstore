@@ -11,7 +11,6 @@ use dawnstore_core::{
     backends::postgres::PostgresBackend,
     models::{DeleteObject, EmptyObject, ListObjectsFilter},
 };
-use serde::Deserialize;
 use sqlx::PgPool;
 use tokio::net::TcpListener;
 
@@ -52,7 +51,6 @@ async fn apply(State(state): State<ApiState>, Json(obj): Json<serde_json::Value>
 }
 
 async fn list(State(state): State<ApiState>, Query(query): Query<ListObjectsFilter>) -> Response {
-    dbg!(&query);
     match state.backend.list(&query).await {
         Ok(x) => Json(x).into_response(),
         Err(y) => format!("{y:?}").into_response(),
@@ -62,5 +60,9 @@ async fn list(State(state): State<ApiState>, Query(query): Query<ListObjectsFilt
 async fn delete_object(
     State(state): State<ApiState>,
     Query(query): Query<DeleteObject>,
-) -> impl IntoResponse {
+) -> Response {
+    match state.backend.delete(&query).await {
+        Ok(x) => Json(x).into_response(),
+        Err(y) => format!("{y:?}").into_response(),
+    }
 }

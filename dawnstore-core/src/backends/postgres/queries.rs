@@ -1,4 +1,4 @@
-use sqlx::PgConnection;
+use sqlx::{PgConnection, QueryBuilder};
 
 use crate::{backends::postgres::data_models::{ForeignKeyConstraint, Object, ObjectInfo, ObjectSchema}, models::ListObjectsFilter};
 
@@ -302,10 +302,15 @@ pub async fn update_object(pool: &sqlx::PgPool, item: &Object) -> Result<(), sql
     Ok(())
 }
 
-pub async fn delete_object(pool: &sqlx::PgPool, id: uuid::Uuid) -> Result<(), sqlx::Error> {
-    sqlx::query!("DELETE FROM objects WHERE id = $1", id)
-        .execute(pool)
-        .await?;
+pub async fn delete_object(pool: &mut PgConnection, namespace: Option<&str>, name: &str, kind: &str) -> Result<(), sqlx::Error> {
+    let mut qb = QueryBuilder::<sqlx::Postgres>::new("DELETE FROM objects WHERE name = ");
+    qb.push_bind(name).push(" and kind = ").push_bind(kind);
+    if let Some(ns) = namespace {
+         qb.push(" and namespace = ");
+         qb.push_bind(ns);
+    }
+    dbg!(qb.sql());
+    qb.build().execute( pool).await?;
     Ok(())
 }
 

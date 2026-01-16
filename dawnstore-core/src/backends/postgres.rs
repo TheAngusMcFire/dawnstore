@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use chrono::Utc;
 use serde_json::Value;
@@ -9,7 +9,7 @@ use uuid::Uuid;
 use crate::{
     backends::postgres::data_models::{Object, ObjectSchema},
     error::DawnStoreError,
-    models::{ListObjectsFilter, ObjectAny, ObjectId, ReturnAny, ReturnObject},
+    models::{DeleteObject, ListObjectsFilter, ObjectAny, ObjectId, ReturnAny, ReturnObject},
 };
 
 mod data_models;
@@ -57,6 +57,18 @@ impl PostgresBackend {
 
     pub async fn sqlx_migrate(&self) -> Result<(), MigrateError> {
         sqlx::migrate!("./migrations").run(&self.pool).await
+    }
+
+    pub async fn delete(&self, delete: &DeleteObject) -> Result<(), DawnStoreError> {
+        let mut con = self.pool.acquire().await?;
+        let ns = match &delete.namespace {
+            Some(x) if x == "default" => None,
+            Some(x) => Some(x),
+            None => None,
+        }
+        .map(|x| x.as_str());
+        queries::delete_object(&mut con, ns, &delete.name, &delete.kind).await?;
+        Ok(())
     }
 
     pub async fn list(
