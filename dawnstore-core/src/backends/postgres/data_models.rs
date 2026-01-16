@@ -23,7 +23,7 @@ pub struct ObjectSchema {
     pub json_schema: String,
 }
 
-#[derive(FromRow, serde::Serialize, serde::Deserialize)]
+#[derive(FromRow, serde::Serialize, serde::Deserialize, Debug)]
 pub struct Object {
     pub id: Uuid,
     pub string_id: String,

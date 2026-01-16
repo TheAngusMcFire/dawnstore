@@ -133,6 +133,9 @@ pub async fn insert_object(pool: &sqlx::PgPool, item: &Object) -> Result<(), sql
 }
 
 pub async fn insert_multiple_objects(pool: &mut PgConnection, items: &[Object]) -> Result<(), sqlx::Error> {
+    if items.is_empty() {
+        return Ok(())
+    }
     let mut query_builder: sqlx::QueryBuilder<sqlx::Postgres> = sqlx::QueryBuilder::new(
         "INSERT INTO objects (id, string_id, api_version, name, kind, created_at, updated_at, namespace, annotations, labels, owners, spec) "
     );
@@ -155,6 +158,9 @@ pub async fn insert_multiple_objects(pool: &mut PgConnection, items: &[Object]) 
 }
 
 pub async fn insert_or_update_multiple_objects(pool: &mut PgConnection, items: &[Object]) -> Result<(), sqlx::Error> {
+    if items.is_empty() {
+        return Ok(())
+    }
     let mut query_builder: sqlx::QueryBuilder<sqlx::Postgres> = sqlx::QueryBuilder::new(
         "INSERT INTO objects (id, string_id, api_version, name, kind, created_at, updated_at, namespace, annotations, labels, owners, spec) "
     );

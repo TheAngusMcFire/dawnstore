@@ -2,13 +2,17 @@ use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
 
+#[derive(schemars::JsonSchema, serde::Serialize, serde::Deserialize)]
+#[schemars(deny_unknown_fields)]
+pub struct EmptyObject {}
+
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone)]
 pub struct ObjectId {
     pub kind: String,
     pub api_version: String,
 }
 
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(serde::Serialize, serde::Deserialize, Debug)]
 pub struct ObjectOwner {
     pub api_version: String,
     pub kind: String,
@@ -16,7 +20,7 @@ pub struct ObjectOwner {
     pub id: uuid::Uuid,
 }
 
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(serde::Serialize, serde::Deserialize, Debug)]
 pub struct Object<T> {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<uuid::Uuid>,

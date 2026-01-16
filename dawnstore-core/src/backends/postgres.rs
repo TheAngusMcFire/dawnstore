@@ -1,13 +1,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::Utc;
-use jsonschema::ValidationError;
 use serde_json::Value;
 use sqlx::{Pool, Postgres, migrate::MigrateError};
 use tokio::sync::RwLock;
+use uuid::Uuid;
 
 use crate::{
-    backends::postgres::data_models::Object,
+    backends::postgres::data_models::{Object, ObjectSchema},
     error::DawnStoreError,
     models::{ObjectAny, ObjectId, ReturnAny, ReturnObject},
 };
@@ -16,12 +16,45 @@ mod data_models;
 mod queries;
 
 pub struct PostgresBackend {
-    pub pool: Pool<Postgres>,
-    pub foraign_key_cache: RwLock<BTreeMap<(String, String), Vec<String>>>,
-    pub schema_cache: RwLock<BTreeMap<ObjectId, jsonschema::Validator>>,
+    pool: Pool<Postgres>,
+    foraign_key_cache: RwLock<BTreeMap<(String, String), Vec<String>>>,
+    schema_cache: RwLock<BTreeMap<ObjectId, jsonschema::Validator>>,
 }
 
 impl PostgresBackend {
+    pub fn new(pool: Pool<Postgres>) -> Self {
+        PostgresBackend {
+            pool,
+            foraign_key_cache: Default::default(),
+            schema_cache: Default::default(),
+        }
+    }
+    pub async fn seed_object_schema<T: schemars::JsonSchema>(
+        &self,
+        api_version: impl Into<String>,
+        kind: impl Into<String>,
+    ) -> Result<(), DawnStoreError> {
+        let api_version = api_version.into();
+        let kind = kind.into();
+        let obj = queries::get_object_schema(&self.pool, &api_version, &kind).await?;
+        if obj.is_some() {
+            return Ok(());
+        }
+        let schema = schemars::schema_for!(T);
+        let schema = serde_json::to_string(&schema)?;
+        queries::insert_object_schema(
+            &self.pool,
+            &ObjectSchema {
+                id: Uuid::new_v4(),
+                api_version,
+                kind,
+                json_schema: schema,
+            },
+        )
+        .await?;
+        Ok(())
+    }
+
     pub async fn sqlx_migrate(&self) -> Result<(), MigrateError> {
         sqlx::migrate!("./migrations").run(&self.pool).await
     }
@@ -46,6 +79,8 @@ impl PostgresBackend {
                     } else {
                         return Err(DawnStoreError::InvalidInputObjectMissingKindField);
                     }
+                } else {
+                    input_objects.push(serde_json::from_value(data)?);
                 }
             } else {
                 return Err(DawnStoreError::InvalidInputObjectMissingKindField);

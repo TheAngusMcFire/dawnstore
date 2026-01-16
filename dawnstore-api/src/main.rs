@@ -3,10 +3,11 @@ use std::sync::Arc;
 use axum::{
     Json, Router,
     extract::{Query, State},
-    response::IntoResponse,
+    response::{IntoResponse, Response},
     routing::{delete, get, post},
 };
 use color_eyre::eyre;
+use dawnstore_core::{backends::postgres::PostgresBackend, models::EmptyObject};
 use serde::Deserialize;
 use sqlx::PgPool;
 use tokio::net::TcpListener;
@@ -15,14 +16,19 @@ use tokio::net::TcpListener;
 async fn main() -> eyre::Result<()> {
     tracing_subscriber::fmt().init();
     let connection_string = std::env::var("DATABASE_URL")?;
-    let pool = Arc::new(PgPool::connect(&connection_string).await?);
-    // dawnstore_core::backends::postgres::sqlx_migrate(pool.as_ref()).await?;
+    let pool = PgPool::connect(&connection_string).await?;
+    let backend = PostgresBackend::new(pool);
+    backend
+        .seed_object_schema::<EmptyObject>("v1", "empty")
+        .await?;
 
     let app = Router::new()
         .route("/apply", post(apply))
         .route("/list", get(list))
         .route("/delete", delete(delete_object))
-        .with_state(ApiState { pool });
+        .with_state(ApiState {
+            backend: Arc::new(backend),
+        });
     let listener = TcpListener::bind("::0:8080").await.unwrap();
     tracing::info!("listening on {}", listener.local_addr().unwrap());
     axum::serve(listener, app).await?;
@@ -32,10 +38,15 @@ async fn main() -> eyre::Result<()> {
 
 #[derive(Clone)]
 struct ApiState {
-    pool: Arc<PgPool>,
+    backend: Arc<PostgresBackend>,
 }
 
-async fn apply(State(state): State<ApiState>) -> impl IntoResponse {}
+async fn apply(State(state): State<ApiState>, Json(obj): Json<serde_json::Value>) -> Response {
+    match state.backend.apply_raw(obj).await {
+        Ok(x) => Json(x).into_response(),
+        Err(y) => format!("{y:?}").into_response(),
+    }
+}
 
 #[derive(Deserialize)]
 struct ListObject {
@@ -45,11 +56,7 @@ struct ListObject {
     pub page: Option<usize>,
     pub page_size: Option<usize>,
 }
-async fn list(
-    State(state): State<ApiState>,
-    Query(query): Query<ListObject>,
-    Json(obj): Json<serde_json::Value>,
-) -> impl IntoResponse {
+async fn list(State(state): State<ApiState>, Query(query): Query<ListObject>) -> impl IntoResponse {
 }
 
 #[derive(Deserialize)]
