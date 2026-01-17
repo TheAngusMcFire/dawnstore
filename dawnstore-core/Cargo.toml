@@ -19,6 +19,7 @@ serde_json.workspace = true
 tracing.workspace = true
 schemars.workspace = true
 jsonschema.workspace = true
+dawnstore-lib = { path = "../dawnstore-lib" }
 sqlx = { workspace = true, optional = true }
 
 [dev-dependencies]
