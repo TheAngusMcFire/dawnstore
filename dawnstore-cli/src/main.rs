@@ -62,7 +62,16 @@ async fn main() -> color_eyre::Result<()> {
             resource,
             item_name,
         } => todo!(),
-        args::Commands::Apply { path } => todo!(),
+        args::Commands::Apply { path } => {
+            let file = std::fs::read_to_string(path)?;
+            let value = serde_yml::from_str::<serde_json::Value>(&file)?;
+            let json_file = serde_json::to_string(&value)?;
+            dbg!(&json_file);
+            api.apply_str(json_file)
+                .await?
+                .iter()
+                .for_each(|x| println!("{}", x.name));
+        }
     }
     Ok(())
 }

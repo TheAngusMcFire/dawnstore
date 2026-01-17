@@ -553,6 +553,7 @@ dependencies = [
  "dawnstore-client-lib",
  "dawnstore-lib",
  "serde",
+ "serde_json",
  "serde_yml",
  "tokio",
 ]

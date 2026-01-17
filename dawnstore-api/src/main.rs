@@ -27,7 +27,7 @@ async fn main() -> eyre::Result<()> {
         .route("/apply", post(apply))
         .route("/get-objects", get(get_objects))
         .route("/get-resource-definitions", get(get_resource_definitions))
-        .route("/delete", delete(delete_object))
+        .route("/delete-object", delete(delete_object))
         .with_state(ApiState {
             backend: Arc::new(backend),
         });

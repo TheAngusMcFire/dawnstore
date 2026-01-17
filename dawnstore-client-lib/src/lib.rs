@@ -5,8 +5,8 @@ use reqwest::Client;
 pub enum DawnstoreApiError {
     #[error("Error from reqwest: {0}")]
     RequestError(#[from] reqwest::Error),
-    #[error("Error from api: {0}")]
-    ApiError(String),
+    #[error("Error from api code: {0} msg: {1}")]
+    ApiError(reqwest::StatusCode, String),
 }
 
 pub struct Api {
@@ -39,7 +39,7 @@ impl Api {
         if i.status().is_success() {
             Ok(i.json::<Vec<ResourceDefinition>>().await?)
         } else {
-            Err(DawnstoreApiError::ApiError(i.text().await?))
+            Err(DawnstoreApiError::ApiError(i.status(), i.text().await?))
         }
     }
 
@@ -56,7 +56,40 @@ impl Api {
         if i.status().is_success() {
             Ok(i.json::<Vec<ReturnObject<serde_json::Value>>>().await?)
         } else {
-            Err(DawnstoreApiError::ApiError(i.text().await?))
+            Err(DawnstoreApiError::ApiError(i.status(), i.text().await?))
+        }
+    }
+
+    pub async fn apply_str(
+        &self,
+        content: String,
+    ) -> Result<Vec<ReturnObject<serde_json::Value>>, DawnstoreApiError> {
+        let i = self
+            .client
+            .post(format!("{}/apply", self.base_url))
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .body(content)
+            .send()
+            .await?;
+        dbg!(i.status());
+        if i.status().is_success() {
+            Ok(i.json::<Vec<ReturnObject<serde_json::Value>>>().await?)
+        } else {
+            Err(DawnstoreApiError::ApiError(i.status(), i.text().await?))
+        }
+    }
+
+    pub async fn delete_object(&self, req: &DeleteObject) -> Result<(), DawnstoreApiError> {
+        let i = self
+            .client
+            .delete(format!("{}/delete-object", self.base_url))
+            .json(req)
+            .send()
+            .await?;
+        if i.status().is_success() {
+            Ok(())
+        } else {
+            Err(DawnstoreApiError::ApiError(i.status(), i.text().await?))
         }
     }
 }

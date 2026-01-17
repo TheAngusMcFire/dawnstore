@@ -78,7 +78,7 @@ pub struct ListOfObjects {
     pub list: Vec<ObjectAny>,
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, serde::Serialize)]
 pub struct DeleteObject {
     pub namespace: Option<String>,
     pub kind: String,
