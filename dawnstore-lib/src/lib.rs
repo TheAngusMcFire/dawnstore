@@ -52,13 +52,20 @@ pub struct ReturnObject<T> {
     pub name: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "is_none_or_empty")]
     pub annotations: Option<BTreeMap<String, String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "is_none_or_empty")]
     pub labels: Option<BTreeMap<String, String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "vec_is_none_or_empty")]
     pub owners: Option<Vec<ObjectOwner>>,
     pub spec: T,
+}
+
+fn is_none_or_empty(v: &Option<BTreeMap<String, String>>) -> bool {
+    v.as_ref().is_none_or(|map| map.is_empty())
+}
+fn vec_is_none_or_empty<T>(v: &Option<Vec<T>>) -> bool {
+    v.as_ref().is_none_or(|map| map.is_empty())
 }
 
 #[derive(serde::Deserialize, serde::Serialize, Debug)]

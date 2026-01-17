@@ -1,8 +1,11 @@
 use clap::Parser;
+use color_eyre::eyre::bail;
 use dawnstore_lib::*;
+use tempfile::tempfile;
 
 mod args;
 mod config;
+mod utils;
 
 #[tokio::main]
 async fn main() -> color_eyre::Result<()> {
@@ -61,7 +64,31 @@ async fn main() -> color_eyre::Result<()> {
         args::Commands::Edit {
             resource,
             item_name,
-        } => todo!(),
+        } => {
+            let mut filter = GetObjectsFilter {
+                namespace: if args.all_namespaces {
+                    None
+                } else {
+                    Some(args.namespace.as_deref().unwrap_or("default").to_string())
+                },
+                kind: Some(resource.clone()),
+                name: Some(item_name.clone()),
+                page: None,
+                page_size: None,
+            };
+            let mut rd = api.get_objects(&filter).await?;
+            let Some(obj) = rd.pop() else {
+                bail!("not found");
+            };
+            let yaml_file = serde_yml::to_string(&obj)?;
+            let Some(x) = utils::edit_with_default_editor(yaml_file.as_str())? else {
+                println!("nothing changed");
+                return Ok(());
+            };
+            let value = serde_yml::from_str::<serde_json::Value>(&x)?;
+            let json_file = serde_json::to_string(&value)?;
+            api.apply_str(json_file).await?;
+        }
         args::Commands::Apply { path } => {
             let file = std::fs::read_to_string(path)?;
             let value = serde_yml::from_str::<serde_json::Value>(&file)?;
