@@ -84,3 +84,14 @@ pub struct DeleteObject {
     pub kind: String,
     pub name: String,
 }
+
+#[derive(serde::Deserialize, serde::Serialize)]
+pub struct ResourceDefinition {
+    pub api_version: String,
+    pub kind: String,
+    pub aliases: Vec<String>,
+    pub json_schema: String,
+}
+
+#[derive(Default, serde::Deserialize, serde::Serialize)]
+pub struct GetResourceDefinitionFilter {}

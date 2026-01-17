@@ -25,7 +25,8 @@ async fn main() -> eyre::Result<()> {
 
     let app = Router::new()
         .route("/apply", post(apply))
-        .route("/list", get(list))
+        .route("/get", get(get_objects))
+        .route("/get-resource-definitions", get(get_resource_definitions))
         .route("/delete", delete(delete_object))
         .with_state(ApiState {
             backend: Arc::new(backend),
@@ -49,8 +50,25 @@ async fn apply(State(state): State<ApiState>, Json(obj): Json<serde_json::Value>
     }
 }
 
-async fn list(State(state): State<ApiState>, Query(query): Query<ListObjectsFilter>) -> Response {
-    match state.backend.list(&query).await {
+async fn get_objects(
+    State(state): State<ApiState>,
+    Query(query): Query<ListObjectsFilter>,
+) -> Response {
+    match state.backend.get(&query).await {
+        Ok(x) => Json(x).into_response(),
+        Err(y) => {
+            let mut resp = format!("{y:?}").into_response();
+            *resp.status_mut() = StatusCode::BAD_REQUEST;
+            resp
+        }
+    }
+}
+
+async fn get_resource_definitions(
+    State(state): State<ApiState>,
+    Query(query): Query<GetResourceDefinitionFilter>,
+) -> Response {
+    match state.backend.get_resource_definition(&query).await {
         Ok(x) => Json(x).into_response(),
         Err(y) => {
             let mut resp = format!("{y:?}").into_response();

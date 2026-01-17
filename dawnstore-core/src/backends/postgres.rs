@@ -74,7 +74,7 @@ impl PostgresBackend {
         Ok(())
     }
 
-    pub async fn list(
+    pub async fn get(
         &self,
         filter: &ListObjectsFilter,
     ) -> Result<Vec<ReturnObject<serde_json::Value>>, DawnStoreError> {
@@ -96,6 +96,23 @@ impl PostgresBackend {
                 spec: x.spec.0,
             })
             .collect())
+    }
+
+    pub async fn get_resource_definition(
+        &self,
+        _filter: &GetResourceDefinitionFilter,
+    ) -> Result<Vec<ResourceDefinition>, DawnStoreError> {
+        let objs = queries::get_all_object_schemas(&self.pool)
+            .await?
+            .into_iter()
+            .map(|x| ResourceDefinition {
+                api_version: x.api_version,
+                kind: x.kind,
+                aliases: x.aliases,
+                json_schema: x.json_schema,
+            })
+            .collect();
+        Ok(objs)
     }
 
     pub async fn apply_raw(
