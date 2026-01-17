@@ -61,7 +61,7 @@ pub struct ReturnObject<T> {
     pub spec: T,
 }
 
-#[derive(serde::Deserialize, Debug)]
+#[derive(serde::Deserialize, serde::Serialize, Debug)]
 pub struct GetObjectsFilter {
     pub namespace: Option<String>,
     pub kind: Option<String>,

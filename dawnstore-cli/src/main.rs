@@ -1,4 +1,5 @@
 use clap::Parser;
+use dawnstore_lib::*;
 
 mod args;
 mod config;
@@ -14,9 +15,9 @@ async fn main() -> color_eyre::Result<()> {
         args::Commands::Get { resource }
             if resource == "resource-definitions" || resource == "rd" =>
         {
+            let rd = api.get_resource_definitions(&Default::default()).await?;
             println!("{:20} {:20} {:20}", "Kind:", "ApiVersion:", "Aliases:");
             println!("------------------------------------------------------");
-            let rd = api.get_resource_definitions(&Default::default()).await?;
             for r in rd {
                 println!(
                     "{:20} {:20} {:20}",
@@ -26,7 +27,33 @@ async fn main() -> color_eyre::Result<()> {
                 );
             }
         }
-        args::Commands::Get { resource } => {}
+        args::Commands::Get { resource } => {
+            let mut filter = GetObjectsFilter {
+                namespace: if args.all_namespaces {
+                    None
+                } else {
+                    Some(args.namespace.as_deref().unwrap_or("default").to_string())
+                },
+                kind: Some(resource.clone()),
+                name: None,
+                page: None,
+                page_size: None,
+            };
+            let rd = api.get_objects(&filter).await?;
+            println!(
+                "{:20} {:20} {:20} {:20}",
+                "Namespace:", "Name:", "Kind:", "Created:"
+            );
+            println!(
+                "----------------------------------------------------------------------------------------------------------------------"
+            );
+            for r in rd {
+                println!(
+                    "{:20} {:20} {:20} {:20}",
+                    r.namespace, r.name, r.kind, r.created_at
+                );
+            }
+        }
         args::Commands::Delete {
             resource,
             item_name,

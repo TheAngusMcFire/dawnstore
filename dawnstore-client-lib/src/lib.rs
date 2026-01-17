@@ -45,16 +45,16 @@ impl Api {
 
     pub async fn get_objects(
         &self,
-        filter: &GetResourceDefinitionFilter,
-    ) -> Result<Vec<ResourceDefinition>, DawnstoreApiError> {
+        filter: &GetObjectsFilter,
+    ) -> Result<Vec<ReturnObject<serde_json::Value>>, DawnstoreApiError> {
         let i = self
             .client
-            .get(format!("{}/get-resource-definitions", self.base_url))
+            .get(format!("{}/get-objects", self.base_url))
             .json(filter)
             .send()
             .await?;
         if i.status().is_success() {
-            Ok(i.json::<Vec<ResourceDefinition>>().await?)
+            Ok(i.json::<Vec<ReturnObject<serde_json::Value>>>().await?)
         } else {
             Err(DawnstoreApiError::ApiError(i.text().await?))
         }

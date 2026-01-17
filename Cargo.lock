@@ -551,6 +551,7 @@ dependencies = [
  "clap",
  "color-eyre",
  "dawnstore-client-lib",
+ "dawnstore-lib",
  "serde",
  "serde_yml",
  "tokio",
@@ -562,6 +563,7 @@ version = "0.1.0"
 dependencies = [
  "dawnstore-lib",
  "reqwest 0.13.1",
+ "serde_json",
  "thiserror 2.0.17",
 ]
 

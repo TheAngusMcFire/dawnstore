@@ -10,3 +10,4 @@ serde_yml = "0.0.12"
 color-eyre.workspace = true
 tokio.workspace = true
 dawnstore-client-lib = { path = "../dawnstore-client-lib" }
+dawnstore-lib = { path = "../dawnstore-lib" }
