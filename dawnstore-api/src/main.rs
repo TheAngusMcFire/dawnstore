@@ -21,7 +21,7 @@ async fn main() -> eyre::Result<()> {
     let pool = PgPool::connect(&connection_string).await?;
     let backend = PostgresBackend::new(pool);
     backend
-        .seed_object_schema::<EmptyObject>("v1", "empty")
+        .seed_object_schema::<EmptyObject>("v1", "empty", ["ep", "empties"])
         .await?;
 
     let app = Router::new()

@@ -53,8 +53,8 @@ pub async fn delete_foreign_key_constraint(pool: &sqlx::PgPool, id: uuid::Uuid) 
 // object schema
 pub async fn insert_object_schema(pool: &sqlx::PgPool, item: &ObjectSchema) -> Result<(), sqlx::Error> {
     sqlx::query!(
-        "INSERT INTO object_schemas (id, api_version, kind, json_schema) VALUES ($1, $2, $3, $4)",
-        item.id, item.api_version, item.kind, item.json_schema
+        "INSERT INTO object_schemas (id, api_version, kind, aliases, json_schema) VALUES ($1, $2, $3, $4, $5)",
+        item.id, item.api_version, item.kind, &item.aliases, item.json_schema
     )
     .execute(pool)
     .await?;
@@ -91,6 +91,7 @@ pub async fn get_all_object_schemas(
             id, 
             api_version, 
             kind, 
+            aliases,
             json_schema 
         FROM object_schemas
         "#

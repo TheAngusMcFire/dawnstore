@@ -33,6 +33,7 @@ impl PostgresBackend {
         &self,
         api_version: impl Into<String>,
         kind: impl Into<String>,
+        aliases: impl IntoIterator<Item = impl Into<String>>,
     ) -> Result<(), DawnStoreError> {
         let api_version = api_version.into();
         let kind = kind.into();
@@ -49,6 +50,7 @@ impl PostgresBackend {
                 api_version,
                 kind,
                 json_schema: schema,
+                aliases: aliases.into_iter().map(|x| x.into()).collect(),
             },
         )
         .await?;

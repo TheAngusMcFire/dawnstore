@@ -20,6 +20,7 @@ pub struct ObjectSchema {
     pub id: uuid::Uuid,
     pub api_version: String,
     pub kind: String,
+    pub aliases: Vec<String>,
     pub json_schema: String,
 }
 

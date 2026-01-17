@@ -2,12 +2,13 @@
 
 resolver = "2"
 
-members = ["dawnstore-api", "dawnstore-core"]
+members = ["dawnstore-api", "dawnstore-cli", "dawnstore-core"]
 
 [workspace.dependencies]
 thiserror = { version = "2.0.17" }
 serde = { version = "1" }
 serde_json = { version = "1.0.149" }
+color-eyre = { version = "0.6.5" }
 uuid = { version = "1.19.0", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 tokio = { version = "1.49.0", features = ["full"] }

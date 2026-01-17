@@ -12,6 +12,7 @@ CREATE TABLE object_schemas (
     id UUID PRIMARY KEY,
     api_version TEXT NOT NULL,
     kind TEXT NOT NULL,
+    aliases TEXT[] NOT NULL DEFAULT '{}',
     json_schema TEXT NOT NULL
 );
 
