@@ -62,7 +62,7 @@ pub struct ReturnObject<T> {
 }
 
 #[derive(serde::Deserialize, Debug)]
-pub struct ListObjectsFilter {
+pub struct GetObjectsFilter {
     pub namespace: Option<String>,
     pub kind: Option<String>,
     pub name: Option<String>,

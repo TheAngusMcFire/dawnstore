@@ -52,7 +52,7 @@ async fn apply(State(state): State<ApiState>, Json(obj): Json<serde_json::Value>
 
 async fn get_objects(
     State(state): State<ApiState>,
-    Query(query): Query<ListObjectsFilter>,
+    Query(query): Query<GetObjectsFilter>,
 ) -> Response {
     match state.backend.get(&query).await {
         Ok(x) => Json(x).into_response(),

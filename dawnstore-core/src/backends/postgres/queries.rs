@@ -248,7 +248,7 @@ pub async fn get_object(pool: &sqlx::PgPool, id: uuid::Uuid) -> Result<Option<Ob
         .await
 }
 
-pub async fn get_objects_by_filter(pool: &sqlx::PgPool, filter: &ListObjectsFilter) -> Result<Vec<Object>, sqlx::Error> {
+pub async fn get_objects_by_filter(pool: &sqlx::PgPool, filter: &GetObjectsFilter) -> Result<Vec<Object>, sqlx::Error> {
     let mut query_builder: sqlx::QueryBuilder<sqlx::Postgres> = sqlx::QueryBuilder::new(
         "SELECT id, string_id, api_version, name, kind, created_at, updated_at, namespace, annotations, labels, owners, spec FROM objects where true "
     );

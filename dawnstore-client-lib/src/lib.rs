@@ -42,4 +42,21 @@ impl Api {
             Err(DawnstoreApiError::ApiError(i.text().await?))
         }
     }
+
+    pub async fn get_objects(
+        &self,
+        filter: &GetResourceDefinitionFilter,
+    ) -> Result<Vec<ResourceDefinition>, DawnstoreApiError> {
+        let i = self
+            .client
+            .get(format!("{}/get-resource-definitions", self.base_url))
+            .json(filter)
+            .send()
+            .await?;
+        if i.status().is_success() {
+            Ok(i.json::<Vec<ResourceDefinition>>().await?)
+        } else {
+            Err(DawnstoreApiError::ApiError(i.text().await?))
+        }
+    }
 }

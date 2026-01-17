@@ -76,7 +76,7 @@ impl PostgresBackend {
 
     pub async fn get(
         &self,
-        filter: &ListObjectsFilter,
+        filter: &GetObjectsFilter,
     ) -> Result<Vec<ReturnObject<serde_json::Value>>, DawnStoreError> {
         let objs = queries::get_objects_by_filter(&self.pool, filter).await?;
         Ok(objs

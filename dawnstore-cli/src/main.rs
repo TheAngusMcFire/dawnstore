@@ -14,9 +14,16 @@ async fn main() -> color_eyre::Result<()> {
         args::Commands::Get { resource }
             if resource == "resource-definitions" || resource == "rd" =>
         {
+            println!("{:20} {:20} {:20}", "Kind:", "ApiVersion:", "Aliases:");
+            println!("------------------------------------------------------");
             let rd = api.get_resource_definitions(&Default::default()).await?;
             for r in rd {
-                println!("{}", r.kind);
+                println!(
+                    "{:20} {:20} {:20}",
+                    r.kind,
+                    r.api_version,
+                    r.aliases.join(", ")
+                );
             }
         }
         args::Commands::Get { resource } => {}
