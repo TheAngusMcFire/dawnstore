@@ -1,7 +1,6 @@
 use clap::Parser;
 use color_eyre::eyre::bail;
 use dawnstore_lib::*;
-use tempfile::tempfile;
 
 mod args;
 mod config;

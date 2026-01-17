@@ -37,6 +37,7 @@ pub struct Object<T> {
     pub labels: Option<BTreeMap<String, String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub owners: Option<Vec<ObjectOwner>>,
+    #[serde(flatten)]
     pub spec: T,
 }
 pub type ObjectAny = Object<serde_json::Value>;
@@ -58,6 +59,7 @@ pub struct ReturnObject<T> {
     pub labels: Option<BTreeMap<String, String>>,
     #[serde(skip_serializing_if = "vec_is_none_or_empty")]
     pub owners: Option<Vec<ObjectOwner>>,
+    #[serde(flatten)]
     pub spec: T,
 }
 
