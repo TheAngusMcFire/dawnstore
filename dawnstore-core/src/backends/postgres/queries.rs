@@ -254,17 +254,17 @@ pub async fn get_objects_by_filter(pool: &sqlx::PgPool, filter: &GetObjectsFilte
     );
 
     if let Some(x) = &filter.namespace {
-        query_builder.push("and namespace =");
+        query_builder.push(" and namespace = ");
         query_builder.push_bind(x);
     }
 
     if let Some(x) = &filter.kind {
-        query_builder.push("and kind =");
+        query_builder.push(" and kind = ");
         query_builder.push_bind(x);
     }
 
     if let Some(x) = &filter.name {
-        query_builder.push("and name =");
+        query_builder.push(" and name = ");
         query_builder.push_bind(x);
     }
 

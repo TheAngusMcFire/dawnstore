@@ -26,7 +26,7 @@ CREATE TABLE objects (
     kind TEXT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL,
-    namespace TEXT,
+    namespace TEXT NOT NULL,
     annotations JSONB NOT NULL DEFAULT '{}'::jsonb,
     labels JSONB NOT NULL DEFAULT '{}'::jsonb,
     owners UUID[] NOT NULL DEFAULT '{}',

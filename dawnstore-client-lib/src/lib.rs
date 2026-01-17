@@ -32,7 +32,7 @@ impl Api {
     ) -> Result<Vec<ResourceDefinition>, DawnstoreApiError> {
         let i = self
             .client
-            .get(format!("{}/get-resource-definitions", self.base_url))
+            .post(format!("{}/get-resource-definitions", self.base_url))
             .json(filter)
             .send()
             .await?;
@@ -49,7 +49,7 @@ impl Api {
     ) -> Result<Vec<ReturnObject<serde_json::Value>>, DawnstoreApiError> {
         let i = self
             .client
-            .get(format!("{}/get-objects", self.base_url))
+            .post(format!("{}/get-objects", self.base_url))
             .json(filter)
             .send()
             .await?;
@@ -71,7 +71,6 @@ impl Api {
             .body(content)
             .send()
             .await?;
-        dbg!(i.status());
         if i.status().is_success() {
             Ok(i.json::<Vec<ReturnObject<serde_json::Value>>>().await?)
         } else {

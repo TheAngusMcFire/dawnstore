@@ -16,7 +16,7 @@ pub struct Cli {
     #[arg(short, long, env = "DAWNSTORE_CONTEXT")]
     pub context_path: String,
 
-    #[arg(short, long)]
+    #[arg(short = 'A', long)]
     pub all_namespaces: bool,
 }
 

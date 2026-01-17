@@ -8,7 +8,10 @@ use axum::{
     routing::{delete, get, post},
 };
 use color_eyre::eyre;
-use dawnstore_core::{backends::postgres::PostgresBackend, models::EmptyObject};
+use dawnstore_core::{
+    backends::postgres::PostgresBackend,
+    models::{EmptyObject, TestCar},
+};
 use dawnstore_lib::*;
 use sqlx::PgPool;
 use tokio::net::TcpListener;
@@ -22,11 +25,14 @@ async fn main() -> eyre::Result<()> {
     backend
         .seed_object_schema::<EmptyObject>("v1", "empty", ["ep", "empties"])
         .await?;
+    backend
+        .seed_object_schema::<TestCar>("v1", "car", ["cr", "cars"])
+        .await?;
 
     let app = Router::new()
         .route("/apply", post(apply))
-        .route("/get-objects", get(get_objects))
-        .route("/get-resource-definitions", get(get_resource_definitions))
+        .route("/get-objects", post(get_objects))
+        .route("/get-resource-definitions", post(get_resource_definitions))
         .route("/delete-object", delete(delete_object))
         .with_state(ApiState {
             backend: Arc::new(backend),
@@ -46,13 +52,17 @@ struct ApiState {
 async fn apply(State(state): State<ApiState>, Json(obj): Json<serde_json::Value>) -> Response {
     match state.backend.apply_raw(obj).await {
         Ok(x) => Json(x).into_response(),
-        Err(y) => format!("{y:?}").into_response(),
+        Err(y) => {
+            let mut resp = format!("{y:?}").into_response();
+            *resp.status_mut() = StatusCode::BAD_REQUEST;
+            resp
+        }
     }
 }
 
 async fn get_objects(
     State(state): State<ApiState>,
-    Query(query): Query<GetObjectsFilter>,
+    Json(query): Json<GetObjectsFilter>,
 ) -> Response {
     match state.backend.get(&query).await {
         Ok(x) => Json(x).into_response(),
@@ -66,7 +76,7 @@ async fn get_objects(
 
 async fn get_resource_definitions(
     State(state): State<ApiState>,
-    Query(query): Query<GetResourceDefinitionFilter>,
+    Json(query): Json<GetResourceDefinitionFilter>,
 ) -> Response {
     match state.backend.get_resource_definition(&query).await {
         Ok(x) => Json(x).into_response(),
@@ -78,10 +88,7 @@ async fn get_resource_definitions(
     }
 }
 
-async fn delete_object(
-    State(state): State<ApiState>,
-    Query(query): Query<DeleteObject>,
-) -> Response {
+async fn delete_object(State(state): State<ApiState>, Json(query): Json<DeleteObject>) -> Response {
     match state.backend.delete(&query).await {
         Ok(x) => Json(x).into_response(),
         Err(y) => {

@@ -33,7 +33,7 @@ pub struct Object {
     pub kind: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
-    pub namespace: Option<String>,
+    pub namespace: String,
     pub annotations: Json<BTreeMap<String, String>>,
     pub labels: Json<BTreeMap<String, String>>,
     pub owners: Vec<Uuid>,

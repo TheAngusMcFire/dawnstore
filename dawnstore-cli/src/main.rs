@@ -37,7 +37,11 @@ async fn main() -> color_eyre::Result<()> {
                 } else {
                     Some(args.namespace.as_deref().unwrap_or("default").to_string())
                 },
-                kind: Some(resource.clone()),
+                kind: if resource == "all" {
+                    None
+                } else {
+                    Some(resource.clone())
+                },
                 name: None,
                 page: None,
                 page_size: None,
@@ -93,7 +97,6 @@ async fn main() -> color_eyre::Result<()> {
             let file = std::fs::read_to_string(path)?;
             let value = serde_yml::from_str::<serde_json::Value>(&file)?;
             let json_file = serde_json::to_string(&value)?;
-            dbg!(&json_file);
             api.apply_str(json_file)
                 .await?
                 .iter()

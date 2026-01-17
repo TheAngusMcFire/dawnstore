@@ -83,7 +83,7 @@ impl PostgresBackend {
             .into_iter()
             .map(|x| ReturnAny {
                 id: x.id,
-                namespace: x.namespace.unwrap_or_else(|| "default".to_string()),
+                namespace: x.namespace,
                 api_version: x.api_version,
                 kind: x.kind,
                 name: x.name,
@@ -231,7 +231,7 @@ impl PostgresBackend {
                 kind: obj.kind.unwrap(),
                 created_at,
                 updated_at: Utc::now(),
-                namespace: obj.namespace,
+                namespace: obj.namespace.unwrap_or("default".to_string()),
                 annotations: sqlx::types::Json(obj.annotations.unwrap_or_default()),
                 labels: sqlx::types::Json(obj.labels.unwrap_or_default()),
                 // todo add the owner references
@@ -248,7 +248,7 @@ impl PostgresBackend {
             .into_iter()
             .map(|x| ReturnAny {
                 id: x.id,
-                namespace: x.namespace.unwrap_or_else(|| "default".to_string()),
+                namespace: x.namespace,
                 api_version: x.api_version,
                 kind: x.kind,
                 name: x.name,

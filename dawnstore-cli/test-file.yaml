@@ -8,3 +8,11 @@
   kind: empty
   name: test3
   spec: {}
+- api_version: v1
+  kind: car
+  name: car1
+  spec:
+    ps: 120
+    model: coolcar
+    brand: vw
+    year: 1994
