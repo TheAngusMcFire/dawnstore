@@ -21,13 +21,6 @@ pub struct Object<T> {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<uuid::Uuid>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub namespace: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub api_version: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub kind: Option<String>,
-    pub name: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub created_at: Option<DateTime<Utc>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub updated_at: Option<DateTime<Utc>>,
@@ -37,6 +30,14 @@ pub struct Object<T> {
     pub labels: Option<BTreeMap<String, String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub owners: Option<Vec<ObjectOwner>>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub namespace: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub api_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    pub name: String,
     #[serde(flatten)]
     pub spec: T,
 }
@@ -47,10 +48,6 @@ pub type Metadata = Object<Option<()>>;
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct ReturnObject<T> {
     pub id: uuid::Uuid,
-    pub namespace: String,
-    pub api_version: String,
-    pub kind: String,
-    pub name: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     #[serde(skip_serializing_if = "is_none_or_empty")]
@@ -59,6 +56,12 @@ pub struct ReturnObject<T> {
     pub labels: Option<BTreeMap<String, String>>,
     #[serde(skip_serializing_if = "vec_is_none_or_empty")]
     pub owners: Option<Vec<ObjectOwner>>,
+
+    pub namespace: String,
+    pub api_version: String,
+    pub kind: String,
+    pub name: String,
+
     #[serde(flatten)]
     pub spec: T,
 }

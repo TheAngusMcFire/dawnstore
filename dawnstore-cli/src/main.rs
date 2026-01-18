@@ -1,6 +1,10 @@
+use std::io::Write;
+
 use clap::Parser;
-use color_eyre::eyre::bail;
+use color_eyre::eyre::{OptionExt, bail};
 use dawnstore_lib::*;
+use serde_json::{Map, Value};
+use tempfile::NamedTempFile;
 
 mod args;
 mod config;
@@ -68,12 +72,8 @@ async fn main() -> color_eyre::Result<()> {
             resource,
             item_name,
         } => {
-            let mut filter = GetObjectsFilter {
-                namespace: if args.all_namespaces {
-                    None
-                } else {
-                    Some(args.namespace.as_deref().unwrap_or("default").to_string())
-                },
+            let filter = GetObjectsFilter {
+                namespace: Some(args.namespace.as_deref().unwrap_or("default").to_string()),
                 kind: Some(resource.clone()),
                 name: Some(item_name.clone()),
                 page: None,
@@ -81,10 +81,50 @@ async fn main() -> color_eyre::Result<()> {
             };
             let mut rd = api.get_objects(&filter).await?;
             let Some(obj) = rd.pop() else {
-                bail!("not found");
+                bail!("object not found");
             };
+            let schema_filter = Default::default();
+            let Some(schema) = api
+                .get_resource_definitions(&schema_filter)
+                .await?
+                .into_iter()
+                .find(|x| x.api_version == obj.api_version && x.kind == obj.kind)
+            else {
+                bail!("schema not found")
+            };
+            let mut json_schema_value =
+                serde_json::from_str::<serde_json::Value>(&schema.json_schema)?;
+            if let Some(Value::Object(props)) = json_schema_value.get_mut("properties") {
+                [
+                    "id",
+                    "created_at",
+                    "updated_at",
+                    "namespace",
+                    "api_version",
+                    "kind",
+                    "name",
+                ]
+                .iter()
+                .for_each(|x| {
+                    props.insert(
+                        x.to_string(),
+                        Value::Object(FromIterator::from_iter([(
+                            "type".to_string(),
+                            Value::String("string".to_string()),
+                        )])),
+                    );
+                });
+            }
+            let str_json_schema = serde_json::to_string(&json_schema_value)?;
+            let mut file = NamedTempFile::with_suffix(".json")?;
+            file.write_all(str_json_schema.as_bytes())?;
+            file.flush()?;
+            let schema_file_name = file.path().to_str().ok_or_eyre("invalid temp path")?;
+            let mut whole_file =
+                format!("# yaml-language-server: $schema={}\n\n", schema_file_name);
             let yaml_file = serde_yml::to_string(&obj)?;
-            let Some(x) = utils::edit_with_default_editor(yaml_file.as_str())? else {
+            whole_file.push_str(&yaml_file);
+            let Some(x) = utils::edit_with_default_editor(whole_file.as_str())? else {
                 println!("nothing changed");
                 return Ok(());
             };
