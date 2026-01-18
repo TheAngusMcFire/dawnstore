@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM foreign_key_constraints WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "8949b4684baedfc29f2b9b11d68c4b5c4f30c432bcd83ab2f13c67b42ee1c3f0"
+}

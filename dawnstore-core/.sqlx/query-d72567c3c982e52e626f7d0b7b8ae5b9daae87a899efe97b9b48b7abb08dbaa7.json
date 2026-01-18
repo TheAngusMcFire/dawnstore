@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE object_schemas SET api_version = $2, kind = $3, json_schema = $4 WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d72567c3c982e52e626f7d0b7b8ae5b9daae87a899efe97b9b48b7abb08dbaa7"
+}
