@@ -34,12 +34,12 @@
 ---
 kind: List
 object_kind: car
-object_api_version: v2
+object_api_version: v1
 list: [
-  { name: my-car    , ps: 120, model: devil, brand: rolsroys, year: 1960, items: [
+  { name: my-car    , ps: 120, model: Jeep, brand: rolsroys, year: 1960, items: [
       some-item
   ]},
-  { name: my-car1    , ps: 120, model: devil, brand: rolsroys, year: 1960, items: [
+  { name: my-car1    , ps: 120, model: Jeep, brand: rolsroys, year: 1960, items: [
       some-item
   ]},
 ]

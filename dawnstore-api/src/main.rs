@@ -22,11 +22,12 @@ async fn main() -> eyre::Result<()> {
     let connection_string = std::env::var("DATABASE_URL")?;
     let pool = PgPool::connect(&connection_string).await?;
     let backend = PostgresBackend::new(pool);
+    backend.sqlx_migrate().await?;
     backend
         .seed_object_schema::<EmptyObject>("v1", "empty", ["ep", "empties"])
         .await?;
     backend
-        .seed_object_schema::<TestCar>("v2", "car", ["cr", "cars"])
+        .seed_object_schema::<TestCar>("v1", "car", ["cr", "cars"])
         .await?;
 
     let app = Router::new()
