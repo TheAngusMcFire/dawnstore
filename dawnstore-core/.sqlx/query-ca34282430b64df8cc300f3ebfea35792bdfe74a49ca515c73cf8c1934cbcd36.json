@@ -1,0 +1,81 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n         SELECT \n             id, \n             api_version, \n             kind, \n             key_path, \n             type as \"type: ForeignKeyType\", \n             behaviour as \"behaviour: ForeignKeyBehaviour\", \n             foreign_key_kind \n         FROM foreign_key_constraints \n         WHERE api_version = $1 and kind = $2\n         ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "api_version",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "kind",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "key_path",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "type: ForeignKeyType",
+        "type_info": {
+          "Custom": {
+            "name": "foreign_key_type",
+            "kind": {
+              "Enum": [
+                "One",
+                "OneOptional",
+                "OneOrMany",
+                "NoneOrMany"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "behaviour: ForeignKeyBehaviour",
+        "type_info": {
+          "Custom": {
+            "name": "foreign_key_behaviour",
+            "kind": {
+              "Enum": [
+                "Fill",
+                "Ignore"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "foreign_key_kind",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "ca34282430b64df8cc300f3ebfea35792bdfe74a49ca515c73cf8c1934cbcd36"
+}

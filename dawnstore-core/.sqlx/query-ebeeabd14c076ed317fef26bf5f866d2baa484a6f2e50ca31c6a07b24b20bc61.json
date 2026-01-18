@@ -1,0 +1,42 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO foreign_key_constraints (id, api_version, kind, key_path, type, behaviour, foreign_key_kind)\n        VALUES ($1, $2, $3, $4, $5, $6, $7)\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Text",
+        {
+          "Custom": {
+            "name": "foreign_key_type",
+            "kind": {
+              "Enum": [
+                "One",
+                "OneOptional",
+                "OneOrMany",
+                "NoneOrMany"
+              ]
+            }
+          }
+        },
+        {
+          "Custom": {
+            "name": "foreign_key_behaviour",
+            "kind": {
+              "Enum": [
+                "Fill",
+                "Ignore"
+              ]
+            }
+          }
+        },
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ebeeabd14c076ed317fef26bf5f866d2baa484a6f2e50ca31c6a07b24b20bc61"
+}

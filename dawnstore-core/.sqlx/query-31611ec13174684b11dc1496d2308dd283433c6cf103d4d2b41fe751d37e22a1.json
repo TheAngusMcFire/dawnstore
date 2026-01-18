@@ -1,0 +1,42 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE foreign_key_constraints \n        SET api_version = $2, kind = $3, key_path = $4, type = $5, behaviour = $6, foreign_key_kind = $7\n        WHERE id = $1\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Text",
+        {
+          "Custom": {
+            "name": "foreign_key_type",
+            "kind": {
+              "Enum": [
+                "One",
+                "OneOptional",
+                "OneOrMany",
+                "NoneOrMany"
+              ]
+            }
+          }
+        },
+        {
+          "Custom": {
+            "name": "foreign_key_behaviour",
+            "kind": {
+              "Enum": [
+                "Fill",
+                "Ignore"
+              ]
+            }
+          }
+        },
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "31611ec13174684b11dc1496d2308dd283433c6cf103d4d2b41fe751d37e22a1"
+}
