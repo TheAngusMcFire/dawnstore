@@ -2,15 +2,15 @@ use std::sync::Arc;
 
 use axum::{
     Json, Router,
-    extract::{Query, State},
+    extract::State,
     http::StatusCode,
     response::{IntoResponse, Response},
-    routing::{delete, get, post},
+    routing::{delete, post},
 };
 use color_eyre::eyre;
 use dawnstore_core::{
     backends::postgres::PostgresBackend,
-    models::{Container, EmptyObject, ForeignKey, ForeignKeyType, TestCar},
+    models::{Container, ForeignKey, ForeignKeyType},
 };
 use dawnstore_lib::*;
 use sqlx::PgPool;
@@ -25,7 +25,7 @@ async fn main() -> eyre::Result<()> {
     backend.sqlx_migrate().await?;
     backend
         .seed_object_schema::<Container>(
-            "v1",
+            "v2",
             "container",
             ["cont", "containers"],
             [ForeignKey::new(
@@ -60,7 +60,7 @@ async fn apply(State(state): State<ApiState>, Json(obj): Json<serde_json::Value>
     match state.backend.apply_raw(obj).await {
         Ok(x) => Json(x).into_response(),
         Err(y) => {
-            let mut resp = format!("{y:?}").into_response();
+            let mut resp = format!("{y}:{y:?}").into_response();
             *resp.status_mut() = StatusCode::BAD_REQUEST;
             resp
         }

@@ -22,12 +22,13 @@ impl ForeignKey {
     }
 }
 
-#[derive(Debug, sqlx::Type, Clone)]
+#[derive(Debug, sqlx::Type, Clone, PartialEq, Eq)]
 #[sqlx(type_name = "foreign_key_type", rename_all = "PascalCase")]
 pub enum ForeignKeyType {
     One,
     OneOptional,
-    Many,
+    OneOrMany,
+    NoneOrMany,
 }
 
 #[derive(Debug, sqlx::Type, Clone)]
@@ -64,6 +65,7 @@ pub struct TestCar {
 #[derive(schemars::JsonSchema, serde::Serialize, serde::Deserialize)]
 #[schemars(deny_unknown_fields)]
 pub struct Container {
+    pub nr: u32,
     pub notes: Option<String>,
     pub parent: Option<String>,
     #[schemars(skip)]

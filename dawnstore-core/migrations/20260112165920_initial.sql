@@ -3,7 +3,8 @@
 CREATE TYPE foreign_key_type AS ENUM (
     'One',
     'OneOptional',
-    'Many'
+    'OneOrMany',
+    'NoneOrMany'
 );
 
 -- Enum for ForeignKeyBehaviour

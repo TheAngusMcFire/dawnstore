@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
 
-#[derive(PartialEq, Eq, PartialOrd, Ord, Clone)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Hash)]
 pub struct ObjectId {
     pub kind: String,
     pub api_version: String,

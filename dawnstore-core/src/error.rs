@@ -1,6 +1,8 @@
 use jsonschema::ValidationError;
 use thiserror::Error;
 
+use crate::models::ForeignKeyType;
+
 #[derive(Error, Debug)]
 pub enum DawnStoreError {
     #[error("Unexpected input Root object allowed are object and array")]
@@ -20,12 +22,52 @@ pub enum DawnStoreError {
     #[error("Database Error: {0}")]
     DatabaseError(#[from] sqlx::Error),
     #[error("Error during jsonshema creation: {0}")]
-    JsonShemaValidatorCreationError(#[from] ValidationError<'static>),
+    JsonSchemaValidatorCreationError(#[from] ValidationError<'static>),
     #[error("Error during jsonshema creation of {api_version}/{kind}/{name}: {validation_error}")]
     ObjectValidationError {
         api_version: String,
         kind: String,
         name: String,
         validation_error: ValidationError<'static>,
+    },
+    #[error(
+        "Error missing foreign key field {api_version}/{kind}/{name}: {foreign_key_path} type: {foreign_key_type:?}"
+    )]
+    ObjectValidationMissingForeignKeyEntry {
+        api_version: String,
+        kind: String,
+        name: String,
+        foreign_key_path: String,
+        foreign_key_type: ForeignKeyType,
+    },
+
+    #[error(
+        "Error wrong foreign key field {api_version}/{kind}/{name}: {foreign_key_path} type: {foreign_key_type:?} value: {value}"
+    )]
+    ObjectValidationWrongForeignKeyEntryFormat {
+        api_version: String,
+        kind: String,
+        name: String,
+        foreign_key_path: String,
+        foreign_key_type: ForeignKeyType,
+        value: String,
+    },
+    #[error(
+        "Error wrong foreign key kind {api_version}/{kind}/{name}: {foreign_key_path} type: {foreign_key_type:?} value: {value}"
+    )]
+    ObjectValidationWrongForeignKeyEntryKind {
+        api_version: String,
+        kind: String,
+        name: String,
+        foreign_key_path: String,
+        foreign_key_type: ForeignKeyType,
+        value: String,
+    },
+    #[error("Error foreign key {api_version}/{kind}/{name}: value: {value} not found")]
+    ObjectValidationForeignKeyNotFound {
+        api_version: String,
+        kind: String,
+        name: String,
+        value: String,
     },
 }

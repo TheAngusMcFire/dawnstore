@@ -10,9 +10,7 @@ use crate::models::{ForeignKeyType, ForeignKeyBehaviour};
 
 // Fetches a single constraint by ID
  pub async fn get_foreign_key_constraints(
-     pool: &PgPool, 
-     id: Uuid
- ) -> Result<Option<ForeignKeyConstraint>> {
+     pool: &mut PgConnection, api_version: &str, kind: &str) -> Result<Vec<ForeignKeyConstraint>> {
      sqlx::query_as!(
          ForeignKeyConstraint,
          r#"
@@ -25,11 +23,11 @@ use crate::models::{ForeignKeyType, ForeignKeyBehaviour};
              behaviour as "behaviour: ForeignKeyBehaviour", 
              foreign_key_kind 
          FROM foreign_key_constraints 
-         WHERE id = $1
+         WHERE api_version = $1 and kind = $2
          "#,
-         id
+         api_version, kind
      )
-     .fetch_optional(pool)
+     .fetch_all(pool)
      .await
  }
 
@@ -319,6 +317,14 @@ pub async fn get_object(pool: &sqlx::PgPool, id: uuid::Uuid) -> Result<Option<Ob
         .await
 }
 
+pub async fn object_exists(pool: &sqlx::PgPool, string_id: &str) -> Result<bool, sqlx::Error> {
+    sqlx::query("SELECT 1 FROM objects WHERE string_id = $1")
+        .bind(string_id)
+        .fetch_optional(pool)
+        .await
+        .map(|x| x.is_some())
+}
+
 pub async fn get_objects_by_filter(pool: &sqlx::PgPool, filter: &GetObjectsFilter) -> Result<Vec<Object>, sqlx::Error> {
     let mut query_builder: sqlx::QueryBuilder<sqlx::Postgres> = sqlx::QueryBuilder::new(
         "SELECT id, string_id, api_version, name, kind, created_at, updated_at, namespace, annotations, labels, owners, spec FROM objects where true "
@@ -352,7 +358,7 @@ pub async fn get_objects_by_filter(pool: &sqlx::PgPool, filter: &GetObjectsFilte
         query_builder.push(" offset ");
         query_builder.push_bind((x * size) as i64);
     }
-    dbg!(query_builder.sql());
+
     query_builder.build_query_as::<Object>().fetch_all(pool).await
 }
 

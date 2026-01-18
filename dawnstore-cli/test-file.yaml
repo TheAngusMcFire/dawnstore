@@ -46,11 +46,16 @@
 ---
 kind: List
 object_kind: container
-object_api_version: v1
+object_api_version: v2
 list:
-- { name: &kitchen kitchen                , parent: null    , notes: "literal kitchen" }
-- { name: &kitchen-shelf1 kitchen-shelf1  , parent: *kitchen, notes: "the white ikea shelf" }
-- { name: Weizenmehl                      , parent: *kitchen-shelf1 }
-- { name: Langkorn Reis                   , parent: *kitchen-shelf1 }
-- { name: Jasmin Reis                     , parent: *kitchen-shelf1 }
-- { name: Sushi Reis                      , parent: *kitchen-shelf1 }
+  - { nr: 1, name: &kitchen kitchen, parent: null, notes: "literal kitchen" }
+  - {
+      nr: 1,
+      name: &kitchen-shelf1 kitchen-shelf1,
+      parent: *kitchen,
+      notes: "the white ikea shelf",
+    }
+  - { nr: 1, name: Weizenmehl, parent: *kitchen-shelf1 }
+  - { nr: 2, name: Langkorn Reis, parent: *kitchen-shelf1 }
+  - { nr: 3, name: Jasmin Reis, parent: *kitchen-shelf1 }
+  - { nr: 4, name: Sushi Reis, parent: *kitchen-shelf1 }
