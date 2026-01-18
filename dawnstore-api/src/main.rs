@@ -26,7 +26,7 @@ async fn main() -> eyre::Result<()> {
         .seed_object_schema::<EmptyObject>("v1", "empty", ["ep", "empties"])
         .await?;
     backend
-        .seed_object_schema::<TestCar>("v1", "car", ["cr", "cars"])
+        .seed_object_schema::<TestCar>("v2", "car", ["cr", "cars"])
         .await?;
 
     let app = Router::new()

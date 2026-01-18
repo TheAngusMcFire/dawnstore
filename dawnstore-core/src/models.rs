@@ -9,4 +9,5 @@ pub struct TestCar {
     pub year: u32,
     pub brand: String,
     pub model: String,
+    pub items: Vec<String>,
 }

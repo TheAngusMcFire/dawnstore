@@ -11,23 +11,36 @@
 #   model: coolcar
 #   brand: vw
 #   year: 1994
+# ---
+# kind: List
+# object_kind: car
+# object_api_version: v1
+# list:
+#   - name: carl-car
+#     ps: 120
+#     model: hugejeep
+#     brand: jeep
+#     year: 2007
+#   - name: eve-car
+#     ps: 160
+#     model: santafeh
+#     brand: hyundai
+#     year: 2019
+#   - name: flo-car
+#     ps: 90
+#     model: leon
+#     brand: sead
+#     year: 2015
 ---
 kind: List
 object_kind: car
-object_api_version: v1
-list:
-  - name: herman-car
-    ps: 120
-    model: hugejeep
-    brand: jeep
-    year: 2007
-  - name: eva-car
-    ps: 160
-    model: santafeh
-    brand: hyundai
-    year: 2019
-  - name: mutter-car
-    ps: 90
-    model: leon
-    brand: sead
-    year: 2015
+object_api_version: v2
+list: [
+  { name: my-car    , ps: 120, model: devil, brand: rolsroys, year: 1960, items: [
+      some-item
+  ]},
+  { name: my-car1    , ps: 120, model: devil, brand: rolsroys, year: 1960, items: [
+      some-item
+  ]},
+]
+

@@ -47,16 +47,16 @@ async fn main() -> color_eyre::Result<()> {
             };
             let rd = api.get_objects(&filter).await?;
             println!(
-                "{:20} {:20} {:20} {:20}",
-                "Namespace:", "Name:", "Kind:", "Created:"
+                "{:20} {:20} {:20} {:10} {:20}",
+                "Namespace:", "Name:", "Kind:", "ApiVersion:", "Created:"
             );
             println!(
                 "----------------------------------------------------------------------------------------------------------------------"
             );
             for r in rd {
                 println!(
-                    "{:20} {:20} {:20} {:20}",
-                    r.namespace, r.name, r.kind, r.created_at
+                    "{:20} {:20} {:20} {:10} {:20}",
+                    r.namespace, r.name, r.kind, r.api_version, r.created_at
                 );
             }
         }

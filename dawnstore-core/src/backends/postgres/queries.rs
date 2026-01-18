@@ -186,6 +186,7 @@ pub async fn insert_or_update_multiple_objects(pool: &mut PgConnection, items: &
         " ON CONFLICT (id) DO UPDATE SET "
     );
 
+    query_builder.push("api_version = EXCLUDED.api_version, ");
     query_builder.push("updated_at = EXCLUDED.updated_at, ");
     query_builder.push("annotations = EXCLUDED.annotations, ");
     query_builder.push("labels = EXCLUDED.labels, ");
