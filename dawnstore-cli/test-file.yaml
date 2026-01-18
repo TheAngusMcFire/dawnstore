@@ -1,18 +1,33 @@
-- api_version: v1
-  kind: empty
-  name: test2
-  spec: {}
-- api_version: v1
-  annotations:
-    app: this is no app
-  kind: empty
-  name: test3
-  spec: {}
-- api_version: v1
-  kind: car
-  name: car1
-  spec:
+# - api_version: v1
+#   kind: empty
+#   name: test2
+# - api_version: v1
+#   kind: empty
+#   name: test3
+# - api_version: v1
+#   kind: car
+#   name: car1
+#   ps: 120
+#   model: coolcar
+#   brand: vw
+#   year: 1994
+---
+kind: List
+object_kind: car
+object_api_version: v1
+list:
+  - name: herman-car
     ps: 120
-    model: coolcar
-    brand: vw
-    year: 1994
+    model: hugejeep
+    brand: jeep
+    year: 2007
+  - name: eva-car
+    ps: 160
+    model: santafeh
+    brand: hyundai
+    year: 2019
+  - name: mutter-car
+    ps: 90
+    model: leon
+    brand: sead
+    year: 2015

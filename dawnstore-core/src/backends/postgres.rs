@@ -132,6 +132,12 @@ impl PostgresBackend {
                                 .iter_mut()
                                 .for_each(|x| x.kind = Some(object_kind.clone()));
                         };
+                        if let Some(Value::String(object_api_version)) = x.get("object_api_version")
+                        {
+                            input_objects
+                                .iter_mut()
+                                .for_each(|x| x.api_version = Some(object_api_version.clone()));
+                        };
                     } else {
                         return Err(DawnStoreError::InvalidInputObjectMissingKindField);
                     }
