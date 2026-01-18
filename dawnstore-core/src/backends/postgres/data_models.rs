@@ -7,12 +7,17 @@ use sqlx::{
         chrono::{DateTime, Utc},
     },
 };
+
+use crate::models::{ForeignKeyBehaviour, ForeignKeyType};
 #[derive(FromRow)]
 pub struct ForeignKeyConstraint {
     pub id: uuid::Uuid,
     pub api_version: String,
     pub kind: String,
     pub key_path: String,
+    pub r#type: ForeignKeyType,
+    pub behaviour: ForeignKeyBehaviour,
+    pub foreign_key_kind: Option<String>,
 }
 
 #[derive(FromRow)]

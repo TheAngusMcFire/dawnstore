@@ -7,8 +7,9 @@ use tokio::sync::RwLock;
 use uuid::Uuid;
 
 use crate::{
-    backends::postgres::data_models::{Object, ObjectSchema},
+    backends::postgres::data_models::{ForeignKeyConstraint, Object, ObjectSchema},
     error::DawnStoreError,
+    models::ForeignKey,
 };
 
 use dawnstore_lib::*;
@@ -30,31 +31,50 @@ impl PostgresBackend {
             schema_cache: Default::default(),
         }
     }
+
     pub async fn seed_object_schema<T: schemars::JsonSchema>(
         &self,
         api_version: impl Into<String>,
         kind: impl Into<String>,
         aliases: impl IntoIterator<Item = impl Into<String>>,
+        foreign_keys: impl IntoIterator<Item = ForeignKey>,
     ) -> Result<(), DawnStoreError> {
         let api_version = api_version.into();
         let kind = kind.into();
-        let obj = queries::get_object_schema(&self.pool, &api_version, &kind).await?;
+        let mut trans = self.pool.begin().await?;
+        let obj = queries::get_object_schema(trans.as_mut(), &api_version, &kind).await?;
         if obj.is_some() {
             return Ok(());
         }
         let schema = schemars::schema_for!(T);
         let schema = serde_json::to_string(&schema)?;
         queries::insert_object_schema(
-            &self.pool,
+            trans.as_mut(),
             &ObjectSchema {
                 id: Uuid::new_v4(),
-                api_version,
-                kind,
+                api_version: api_version.clone(),
+                kind: kind.clone(),
                 json_schema: schema,
                 aliases: aliases.into_iter().map(|x| x.into()).collect(),
             },
         )
         .await?;
+        let foreign_keys = foreign_keys.into_iter();
+        let mut keys = Vec::<ForeignKeyConstraint>::new();
+        for key in foreign_keys {
+            keys.push(ForeignKeyConstraint {
+                id: Uuid::new_v4(),
+                api_version: api_version.clone(),
+                kind: kind.clone(),
+                key_path: key.path,
+                r#type: key.ty,
+                behaviour: key.behaviour,
+                foreign_key_kind: key.foreign_kind,
+            });
+        }
+        queries::insert_multiple_foreign_key_constraints(trans.as_mut(), keys.as_slice()).await?;
+        trans.commit().await?;
+
         Ok(())
     }
 
@@ -169,8 +189,9 @@ impl PostgresBackend {
                 Some(x) => x,
                 None => {
                     drop(schema_cache);
+                    let mut conn = self.pool.acquire().await?;
                     let Some(schema) =
-                        queries::get_object_schema(&self.pool, api_version, kind).await?
+                        queries::get_object_schema(&mut conn, api_version, kind).await?
                     else {
                         return Err(DawnStoreError::NoSchemaForObjectFound {
                             api_version: api_version.clone(),

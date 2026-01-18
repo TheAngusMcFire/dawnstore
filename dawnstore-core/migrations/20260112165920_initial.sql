@@ -1,9 +1,25 @@
 -- Add migration script here
+-- Enum for ForeignKeyType
+CREATE TYPE foreign_key_type AS ENUM (
+    'One',
+    'OneOptional',
+    'Many'
+);
+
+-- Enum for ForeignKeyBehaviour
+CREATE TYPE foreign_key_behaviour AS ENUM (
+    'Fill',
+    'Ignore'
+);
+
 CREATE TABLE foreign_key_constraints (
     id UUID PRIMARY KEY,
     api_version TEXT NOT NULL,
     kind TEXT NOT NULL,
-    key_path TEXT NOT NULL
+    key_path TEXT NOT NULL,
+    type foreign_key_type NOT NULL,
+    behaviour foreign_key_behaviour NOT NULL,
+    foreign_key_kind TEXT
 );
 
 CREATE UNIQUE INDEX idx_foreign_key_constraints_lookup ON foreign_key_constraints (api_version, kind);

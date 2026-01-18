@@ -31,16 +31,26 @@
 #     model: leon
 #     brand: sead
 #     year: 2015
+# ---
+# kind: List
+# object_kind: car
+# object_api_version: v1
+# list: [
+#   { name: my-car    , ps: 120, model: Jeep, brand: rolsroys, year: 1960, items: [
+#       some-item
+#   ]},
+#   { name: my-car1    , ps: 120, model: Jeep, brand: rolsroys, year: 1960, items: [
+#       some-item
+#   ]},
+# ]
 ---
 kind: List
-object_kind: car
+object_kind: container
 object_api_version: v1
-list: [
-  { name: my-car    , ps: 120, model: Jeep, brand: rolsroys, year: 1960, items: [
-      some-item
-  ]},
-  { name: my-car1    , ps: 120, model: Jeep, brand: rolsroys, year: 1960, items: [
-      some-item
-  ]},
-]
-
+list:
+- { name: &kitchen kitchen                , parent: null    , notes: "literal kitchen" }
+- { name: &kitchen-shelf1 kitchen-shelf1  , parent: *kitchen, notes: "the white ikea shelf" }
+- { name: Weizenmehl                      , parent: *kitchen-shelf1 }
+- { name: Langkorn Reis                   , parent: *kitchen-shelf1 }
+- { name: Jasmin Reis                     , parent: *kitchen-shelf1 }
+- { name: Sushi Reis                      , parent: *kitchen-shelf1 }

@@ -10,7 +10,7 @@ use axum::{
 use color_eyre::eyre;
 use dawnstore_core::{
     backends::postgres::PostgresBackend,
-    models::{EmptyObject, TestCar},
+    models::{Container, EmptyObject, ForeignKey, ForeignKeyType, TestCar},
 };
 use dawnstore_lib::*;
 use sqlx::PgPool;
@@ -24,10 +24,16 @@ async fn main() -> eyre::Result<()> {
     let backend = PostgresBackend::new(pool);
     backend.sqlx_migrate().await?;
     backend
-        .seed_object_schema::<EmptyObject>("v1", "empty", ["ep", "empties"])
-        .await?;
-    backend
-        .seed_object_schema::<TestCar>("v1", "car", ["cr", "cars"])
+        .seed_object_schema::<Container>(
+            "v1",
+            "container",
+            ["cont", "containers"],
+            [ForeignKey::new(
+                "parent",
+                ForeignKeyType::OneOptional,
+                Some("container"),
+            )],
+        )
         .await?;
 
     let app = Router::new()

@@ -4,55 +4,125 @@ use crate::{backends::postgres::data_models::{ForeignKeyConstraint, Object, Obje
 use dawnstore_lib::*;
 
 // foreign key constraint
-pub async fn insert_foreign_key_constraint(pool: &sqlx::PgPool, item: &ForeignKeyConstraint) -> Result<(), sqlx::Error> {
+use sqlx::{PgPool, Result};
+use uuid::Uuid;
+use crate::models::{ForeignKeyType, ForeignKeyBehaviour};
+
+// Fetches a single constraint by ID
+ pub async fn get_foreign_key_constraints(
+     pool: &PgPool, 
+     id: Uuid
+ ) -> Result<Option<ForeignKeyConstraint>> {
+     sqlx::query_as!(
+         ForeignKeyConstraint,
+         r#"
+         SELECT 
+             id, 
+             api_version, 
+             kind, 
+             key_path, 
+             type as "type: ForeignKeyType", 
+             behaviour as "behaviour: ForeignKeyBehaviour", 
+             foreign_key_kind 
+         FROM foreign_key_constraints 
+         WHERE id = $1
+         "#,
+         id
+     )
+     .fetch_optional(pool)
+     .await
+ }
+
+/// Inserts a single record
+pub async fn insert_foreign_key_constraints(
+    pool: &PgPool, 
+    row: &ForeignKeyConstraint
+) -> Result<()> {
     sqlx::query!(
-        "INSERT INTO foreign_key_constraints (id, api_version, kind, key_path) VALUES ($1, $2, $3, $4)",
-        item.id, item.api_version, item.kind, item.key_path
+        r#"
+        INSERT INTO foreign_key_constraints (id, api_version, kind, key_path, type, behaviour, foreign_key_kind)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        "#,
+        row.id, 
+        row.api_version, 
+        row.kind, 
+        row.key_path, 
+        &row.r#type as &ForeignKeyType, 
+        &row.behaviour as &ForeignKeyBehaviour, 
+        row.foreign_key_kind
     )
     .execute(pool)
     .await?;
     Ok(())
 }
 
-pub async fn insert_multiple_foreign_key_constraints(pool: &sqlx::PgPool, items: &[ForeignKeyConstraint]) -> Result<(), sqlx::Error> {
-    let mut query_builder: sqlx::QueryBuilder<sqlx::Postgres> = sqlx::QueryBuilder::new(
-        "INSERT INTO foreign_key_constraints (id, api_version, kind, key_path) "
-    );
-    query_builder.push_values(items, |mut b, item| {
-        b.push_bind(item.id)
-            .push_bind(&item.api_version)
-            .push_bind(&item.kind)
-            .push_bind(&item.key_path);
-    });
-    query_builder.build().execute(pool).await?;
-    Ok(())
-}
-
-pub async fn get_foreign_key_constraint(pool: &sqlx::PgPool, id: uuid::Uuid) -> Result<Option<ForeignKeyConstraint>, sqlx::Error> {
-    sqlx::query_as!(ForeignKeyConstraint, "SELECT * FROM foreign_key_constraints WHERE id = $1", id)
-        .fetch_optional(pool)
-        .await
-}
-
-pub async fn update_foreign_key_constraint(pool: &sqlx::PgPool, item: &ForeignKeyConstraint) -> Result<(), sqlx::Error> {
-    sqlx::query!(
-        "UPDATE foreign_key_constraints SET api_version = $2, kind = $3, key_path = $4 WHERE id = $1",
-        item.id, item.api_version, item.kind, item.key_path
-    )
-    .execute(pool)
-    .await?;
-    Ok(())
-}
-
-pub async fn delete_foreign_key_constraint(pool: &sqlx::PgPool, id: uuid::Uuid) -> Result<(), sqlx::Error> {
-    sqlx::query!("DELETE FROM foreign_key_constraints WHERE id = $1", id)
-        .execute(pool)
+/// Inserts multiple records within a single transaction
+pub async fn insert_multiple_foreign_key_constraints(
+    pool: &mut PgConnection, 
+    rows: &[ForeignKeyConstraint]
+) -> Result<()> {
+    for row in rows {
+        sqlx::query!(
+            r#"
+            INSERT INTO foreign_key_constraints (id, api_version, kind, key_path, type, behaviour, foreign_key_kind)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            "#,
+            row.id, 
+            row.api_version, 
+            row.kind, 
+            row.key_path, 
+            &row.r#type as &ForeignKeyType, 
+            &row.behaviour as &ForeignKeyBehaviour, 
+            row.foreign_key_kind
+        )
+        .execute(&mut *pool)
         .await?;
+    }
     Ok(())
+}
+
+/// Updates an existing record based on ID
+pub async fn update_foreign_key_constraints(
+    pool: &PgPool, 
+    row: &ForeignKeyConstraint
+) -> Result<bool> {
+    let result = sqlx::query!(
+        r#"
+        UPDATE foreign_key_constraints 
+        SET api_version = $2, kind = $3, key_path = $4, type = $5, behaviour = $6, foreign_key_kind = $7
+        WHERE id = $1
+        "#,
+        row.id, 
+        row.api_version, 
+        row.kind, 
+        row.key_path, 
+        &row.r#type as &ForeignKeyType, 
+        &row.behaviour as &ForeignKeyBehaviour, 
+        row.foreign_key_kind
+    )
+    .execute(pool)
+    .await?;
+    
+    Ok(result.rows_affected() > 0)
+}
+
+/// Deletes a record by ID
+pub async fn delete_foreign_key_constraints(
+    pool: &PgPool, 
+    id: Uuid
+) -> Result<bool> {
+    let result = sqlx::query!(
+        "DELETE FROM foreign_key_constraints WHERE id = $1",
+        id
+    )
+    .execute(pool)
+    .await?;
+    
+    Ok(result.rows_affected() > 0)
 }
 
 // object schema
-pub async fn insert_object_schema(pool: &sqlx::PgPool, item: &ObjectSchema) -> Result<(), sqlx::Error> {
+pub async fn insert_object_schema(pool: &mut PgConnection, item: &ObjectSchema) -> Result<(), sqlx::Error> {
     sqlx::query!(
         "INSERT INTO object_schemas (id, api_version, kind, aliases, json_schema) VALUES ($1, $2, $3, $4, $5)",
         item.id, item.api_version, item.kind, &item.aliases, item.json_schema
@@ -76,7 +146,7 @@ pub async fn insert_multiple_object_schemas(pool: &sqlx::PgPool, items: &[Object
     Ok(())
 }
 
-pub async fn get_object_schema(pool: &sqlx::PgPool, api_version: &str, kind: &str ) -> Result<Option<ObjectSchema>, sqlx::Error> {
+pub async fn get_object_schema(pool: &mut PgConnection, api_version: &str, kind: &str ) -> Result<Option<ObjectSchema>, sqlx::Error> {
     sqlx::query_as!(ObjectSchema, "SELECT * FROM object_schemas WHERE kind = $1 and api_version = $2" , kind, api_version)
         .fetch_optional(pool)
         .await
