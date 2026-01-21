@@ -170,7 +170,7 @@ impl PostgresBackend {
             .await?;
 
             // check if the foreign keys are valid
-            apply_impl::check_foreign_keys(
+            let fks = apply_impl::check_foreign_keys(
                 &mut con,
                 &self.foreign_key_cache,
                 &obj,

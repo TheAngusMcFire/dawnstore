@@ -101,7 +101,7 @@ pub async fn check_foreign_keys(
     kind: &str,
     ns: &str,
     type_id: String,
-) -> Result<(), DawnStoreError> {
+) -> Result<Vec<(Vec<String>, Uuid)>, DawnStoreError> {
     let mut foreign_key_cache = fkc.read().await;
     let foreign_keys = match foreign_key_cache.get(&type_id) {
         Some(x) => x,
@@ -223,7 +223,7 @@ pub async fn check_foreign_keys(
         fk_string_ids.push((fks, key.id));
     }
 
-    Ok(())
+    Ok(fk_string_ids)
 }
 
 pub async fn maintain_objects(
