@@ -70,6 +70,7 @@ impl PostgresBackend {
                 r#type: key.ty,
                 behaviour: key.behaviour,
                 foreign_key_kind: key.foreign_kind,
+                parent_key_path: key.parent_path,
             });
         }
         queries::insert_multiple_foreign_key_constraints(trans.as_mut(), keys.as_slice()).await?;

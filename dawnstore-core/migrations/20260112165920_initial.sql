@@ -18,6 +18,7 @@ CREATE TABLE foreign_key_constraints (
     api_version TEXT NOT NULL,
     kind TEXT NOT NULL,
     key_path TEXT NOT NULL,
+    parent_key_path TEXT,
     type foreign_key_type NOT NULL,
     behaviour foreign_key_behaviour NOT NULL,
     foreign_key_kind TEXT

@@ -19,6 +19,7 @@ use crate::models::{ForeignKeyType, ForeignKeyBehaviour};
              api_version, 
              kind, 
              key_path, 
+             parent_key_path, 
              type as "type: ForeignKeyType", 
              behaviour as "behaviour: ForeignKeyBehaviour", 
              foreign_key_kind 
@@ -38,13 +39,14 @@ pub async fn insert_foreign_key_constraints(
 ) -> Result<()> {
     sqlx::query!(
         r#"
-        INSERT INTO foreign_key_constraints (id, api_version, kind, key_path, type, behaviour, foreign_key_kind)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        INSERT INTO foreign_key_constraints (id, api_version, kind, key_path, parent_key_path, type, behaviour, foreign_key_kind)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         "#,
         row.id, 
         row.api_version, 
         row.kind, 
         row.key_path, 
+        row.parent_key_path, 
         &row.r#type as &ForeignKeyType, 
         &row.behaviour as &ForeignKeyBehaviour, 
         row.foreign_key_kind
@@ -62,13 +64,14 @@ pub async fn insert_multiple_foreign_key_constraints(
     for row in rows {
         sqlx::query!(
             r#"
-            INSERT INTO foreign_key_constraints (id, api_version, kind, key_path, type, behaviour, foreign_key_kind)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            INSERT INTO foreign_key_constraints (id, api_version, kind, key_path, parent_key_path, type, behaviour, foreign_key_kind)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
             "#,
             row.id, 
             row.api_version, 
             row.kind, 
             row.key_path, 
+            row.parent_key_path, 
             &row.r#type as &ForeignKeyType, 
             &row.behaviour as &ForeignKeyBehaviour, 
             row.foreign_key_kind
@@ -87,13 +90,14 @@ pub async fn update_foreign_key_constraints(
     let result = sqlx::query!(
         r#"
         UPDATE foreign_key_constraints 
-        SET api_version = $2, kind = $3, key_path = $4, type = $5, behaviour = $6, foreign_key_kind = $7
+        SET api_version = $2, kind = $3, key_path = $4, parent_key_path = $5, type = $6, behaviour = $7, foreign_key_kind = $8
         WHERE id = $1
         "#,
         row.id, 
         row.api_version, 
         row.kind, 
         row.key_path, 
+        row.parent_key_path, 
         &row.r#type as &ForeignKeyType, 
         &row.behaviour as &ForeignKeyBehaviour, 
         row.foreign_key_kind

@@ -2,6 +2,7 @@ use dawnstore_lib::ReturnObject;
 
 pub struct ForeignKey {
     pub path: String,
+    pub parent_path: Option<String>,
     pub ty: ForeignKeyType,
     pub behaviour: ForeignKeyBehaviour,
     /// None: different kinds are allowed
@@ -10,6 +11,7 @@ pub struct ForeignKey {
 impl ForeignKey {
     pub fn new(
         path: impl Into<String>,
+        parent_path: Option<impl Into<String>>,
         ty: ForeignKeyType,
         foreign_kind: Option<impl Into<String>>,
     ) -> Self {
@@ -18,6 +20,7 @@ impl ForeignKey {
             ty,
             behaviour: ForeignKeyBehaviour::Fill,
             foreign_kind: foreign_kind.map(|x| x.into()),
+            parent_path: parent_path.map(|x| x.into()),
         }
     }
 }

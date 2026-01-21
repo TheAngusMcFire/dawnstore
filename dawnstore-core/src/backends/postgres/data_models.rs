@@ -15,6 +15,7 @@ pub struct ForeignKeyConstraint {
     pub api_version: String,
     pub kind: String,
     pub key_path: String,
+    pub parent_key_path: Option<String>,
     pub r#type: ForeignKeyType,
     pub behaviour: ForeignKeyBehaviour,
     pub foreign_key_kind: Option<String>,

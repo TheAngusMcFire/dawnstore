@@ -30,6 +30,7 @@ async fn main() -> eyre::Result<()> {
             ["cont", "containers"],
             [ForeignKey::new(
                 "parent",
+                Some("children"),
                 ForeignKeyType::OneOptional,
                 Some("container"),
             )],
