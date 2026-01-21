@@ -2,12 +2,6 @@ use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
 
-#[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Hash)]
-pub struct ObjectId {
-    pub kind: String,
-    pub api_version: String,
-}
-
 #[derive(serde::Serialize, serde::Deserialize, Debug)]
 pub struct ObjectOwner {
     pub api_version: String,

@@ -321,7 +321,7 @@ pub async fn get_object(pool: &sqlx::PgPool, id: uuid::Uuid) -> Result<Option<Ob
         .await
 }
 
-pub async fn object_exists(pool: &sqlx::PgPool, string_id: &str) -> Result<bool, sqlx::Error> {
+pub async fn object_exists(pool: &mut PgConnection, string_id: &str) -> Result<bool, sqlx::Error> {
     sqlx::query("SELECT 1 FROM objects WHERE string_id = $1")
         .bind(string_id)
         .fetch_optional(pool)
