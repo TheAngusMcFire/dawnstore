@@ -54,3 +54,14 @@ CREATE TABLE objects (
 CREATE INDEX idx_objects_string_id_lookup ON objects (string_id);
 CREATE INDEX idx_objects_lookup ON objects (namespace, kind, name);
 CREATE INDEX idx_objects_labels ON objects USING GIN (labels);
+
+CREATE TABLE relations (
+    object_id UUID NOT NULL,
+    foreign_object_id UUID NOT NULL,
+    foreign_key_id UUID NOT NULL,
+    PRIMARY KEY (object_id, foreign_object_id, foreign_key_id)
+);
+
+CREATE INDEX idx_relations_object_id ON relations (object_id);
+CREATE INDEX idx_relations_foreign_object_id ON relations (foreign_object_id);
+CREATE INDEX idx_relations_foreign_key_id ON relations (foreign_key_id);

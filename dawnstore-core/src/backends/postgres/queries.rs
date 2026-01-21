@@ -1,6 +1,6 @@
 use sqlx::{PgConnection, QueryBuilder};
 
-use crate::{backends::postgres::data_models::{ForeignKeyConstraint, Object, ObjectInfo, ObjectSchema}};
+use crate::backends::postgres::data_models::{ForeignKeyConstraint, Object, ObjectInfo, ObjectSchema, Relation};
 use dawnstore_lib::*;
 
 // foreign key constraint
@@ -397,4 +397,86 @@ pub async fn delete_object(pool: &mut PgConnection, namespace: Option<&str>, nam
     Ok(())
 }
 
+pub async fn get_relation(
+    pool: &mut PgConnection,
+    object_id: Uuid,
+    foreign_object_id: Uuid,
+    foreign_key_id: Uuid,
+) -> Result<Option<Relation>, sqlx::Error> {
+    sqlx::query_as!(
+        Relation,
+        r#"
+        SELECT object_id, foreign_object_id, foreign_key_id 
+        FROM relations 
+        WHERE object_id = $1 AND foreign_object_id = $2 AND foreign_key_id = $3
+        "#,
+        object_id,
+        foreign_object_id,
+        foreign_key_id
+    )
+    .fetch_optional(pool)
+    .await
+}
 
+/// Inserts the current Relation instance into the database
+pub async fn insert_relation(pool: &mut PgConnection, relation: &Relation) -> Result<(), sqlx::Error> {
+    sqlx::query!(
+        r#"
+        INSERT INTO relations (object_id, foreign_object_id, foreign_key_id)
+        VALUES ($1, $2, $3)
+        "#,
+        relation.object_id,
+        relation.foreign_object_id,
+        relation.foreign_key_id
+    )
+    .execute(pool)
+    .await?;
+    
+    Ok(())
+}
+
+/// Deletes a relation by its composite primary key
+pub async fn delete_relation(
+    pool: &mut PgConnection,
+    object_id: Uuid,
+    foreign_object_id: Uuid,
+    foreign_key_id: Uuid,
+) -> Result<u64, sqlx::Error> {
+    let result = sqlx::query!(
+        r#"
+        DELETE FROM relations 
+        WHERE object_id = $1 AND foreign_object_id = $2 AND foreign_key_id = $3
+        "#,
+        object_id,
+        foreign_object_id,
+        foreign_key_id
+    )
+    .execute(pool)
+    .await?;
+
+    Ok(result.rows_affected())
+}
+
+pub async fn insert_multiple_relation(
+    pool: &mut PgConnection,
+    relations: &[Relation],
+) -> Result<(), sqlx::Error> {
+    if relations.is_empty() {
+        return Ok(());
+    }
+
+    let mut query_builder  = QueryBuilder::new(
+        "INSERT INTO relations (object_id, foreign_object_id, foreign_key_id) "
+    );
+
+    query_builder.push_values(relations, |mut b, rel| {
+        b.push_bind(rel.object_id)
+         .push_bind(rel.foreign_object_id)
+         .push_bind(rel.foreign_key_id);
+    });
+
+    let query = query_builder.build();
+    query.execute(pool).await?;
+
+    Ok(())
+}

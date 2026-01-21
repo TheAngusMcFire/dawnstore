@@ -52,3 +52,10 @@ pub struct ObjectInfo {
     pub string_id: String,
     pub created_at: DateTime<Utc>,
 }
+
+#[derive(FromRow, serde::Serialize, serde::Deserialize)]
+pub struct Relation {
+    pub object_id: Uuid,
+    pub foreign_object_id: Uuid,
+    pub foreign_key_id: Uuid,
+}
