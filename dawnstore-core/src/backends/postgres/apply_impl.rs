@@ -4,6 +4,7 @@ use chrono::Utc;
 use serde_json::Value;
 use sqlx::PgConnection;
 use tokio::sync::RwLock;
+use uuid::Uuid;
 
 use crate::{
     backends::postgres::{
@@ -95,39 +96,43 @@ pub async fn validate_object_schema(
 pub async fn check_foreign_keys(
     pool: &mut PgConnection,
     fkc: &RwLock<HashMap<String, Vec<ForeignKeyConstraint>>>,
-    string_ids: &Vec<String>,
     obj: &dawnstore_lib::Object<Value>,
-    api_version: &String,
-    kind: &String,
+    api_version: &str,
+    kind: &str,
     ns: &str,
-    object_id: String,
+    type_id: String,
 ) -> Result<(), DawnStoreError> {
     let mut foreign_key_cache = fkc.read().await;
-    let foreign_keys = match foreign_key_cache.get(&object_id) {
+    let foreign_keys = match foreign_key_cache.get(&type_id) {
         Some(x) => x,
         None => {
             drop(foreign_key_cache);
             let costraints = queries::get_foreign_key_constraints(pool, api_version, kind).await?;
-            fkc.write().await.insert(object_id.clone(), costraints);
+            fkc.write().await.insert(type_id.clone(), costraints);
             foreign_key_cache = fkc.read().await;
             foreign_key_cache
-                .get(&object_id)
+                .get(&type_id)
                 .expect("we just added the constraints")
         }
     };
-    let mut fk_string_ids = Vec::<String>::new();
+
+    let mut fk_string_ids: Vec<(Vec<String>, Uuid)> = Default::default();
     'outer: for key in foreign_keys {
         let path_segments = key.key_path.split(".");
-        let mut key_position = &Value::Null;
+        let mut key_position = None::<&Value>;
         for seg in path_segments {
-            key_position = match obj.spec.get(seg) {
-                Some(x) => x,
+            let k = match key_position {
+                Some(x) => x.get(seg),
+                None => obj.spec.get(seg),
+            };
+            key_position = match k {
+                Some(x) => Some(x),
                 None if key.r#type == ForeignKeyType::OneOptional => continue 'outer,
                 None if key.r#type == ForeignKeyType::NoneOrMany => continue 'outer,
                 None => {
                     return Err(DawnStoreError::ObjectValidationMissingForeignKeyEntry {
-                        api_version: api_version.clone(),
-                        kind: kind.clone(),
+                        api_version: api_version.to_owned(),
+                        kind: kind.to_owned(),
                         name: obj.name.clone(),
                         foreign_key_path: key.key_path.clone(),
                         foreign_key_type: key.r#type.clone(),
@@ -135,6 +140,17 @@ pub async fn check_foreign_keys(
                 }
             };
         }
+
+        let Some(key_position) = key_position else {
+            return Err(DawnStoreError::ObjectValidationMissingForeignKeyEntry {
+                api_version: api_version.to_owned(),
+                kind: kind.to_owned(),
+                name: obj.name.clone(),
+                foreign_key_path: key.key_path.clone(),
+                foreign_key_type: key.r#type.clone(),
+            });
+        };
+
         let foreign_key_values = match (&key.r#type, key_position) {
             (ForeignKeyType::One, Value::String(x)) => vec![x],
             (ForeignKeyType::OneOptional, Value::Null) => vec![],
@@ -158,14 +174,16 @@ pub async fn check_foreign_keys(
                 .collect(),
             _ => {
                 return Err(DawnStoreError::ObjectValidationMissingForeignKeyEntry {
-                    api_version: api_version.clone(),
-                    kind: kind.clone(),
+                    api_version: api_version.to_owned(),
+                    kind: kind.to_owned(),
                     name: obj.name.clone(),
                     foreign_key_path: key.key_path.clone(),
                     foreign_key_type: key.r#type.clone(),
                 });
             }
         };
+
+        let mut fks = Vec::with_capacity(foreign_key_values.len());
         for fk_val in foreign_key_values {
             let comps = fk_val.split("/").collect::<Vec<_>>();
             let (ns, fk_kind, fk_name) = match comps.as_slice() {
@@ -173,11 +191,11 @@ pub async fn check_foreign_keys(
                 // assume same ns as the current object
                 [kind, name] => (ns, *kind, *name),
                 // assume same ns and kind as the current object
-                [name] => (ns, kind.as_str(), *name),
+                [name] => (ns, kind, *name),
                 _ => {
                     return Err(DawnStoreError::ObjectValidationWrongForeignKeyEntryFormat {
-                        api_version: api_version.clone(),
-                        kind: kind.clone(),
+                        api_version: api_version.to_owned(),
+                        kind: kind.to_owned(),
                         name: obj.name.clone(),
                         foreign_key_path: key.key_path.clone(),
                         foreign_key_type: key.r#type.clone(),
@@ -190,8 +208,8 @@ pub async fn check_foreign_keys(
                 && k.as_str() != fk_kind
             {
                 return Err(DawnStoreError::ObjectValidationWrongForeignKeyEntryKind {
-                    api_version: api_version.clone(),
-                    kind: kind.clone(),
+                    api_version: api_version.to_owned(),
+                    kind: kind.to_owned(),
                     name: obj.name.clone(),
                     foreign_key_path: key.key_path.clone(),
                     foreign_key_type: key.r#type.clone(),
@@ -199,23 +217,10 @@ pub async fn check_foreign_keys(
                 });
             }
 
-            fk_string_ids.push(format!("{ns}/{fk_kind}/{fk_name}"));
-        }
-    }
-
-    for fk in fk_string_ids {
-        if string_ids.contains(&fk) {
-            continue;
+            fks.push(format!("{ns}/{fk_kind}/{fk_name}"));
         }
 
-        if !queries::object_exists(pool, fk.as_str()).await? {
-            return Err(DawnStoreError::ObjectValidationForeignKeyNotFound {
-                api_version: api_version.clone(),
-                kind: kind.clone(),
-                name: obj.name.clone(),
-                value: fk,
-            });
-        }
+        fk_string_ids.push((fks, key.id));
     }
 
     Ok(())

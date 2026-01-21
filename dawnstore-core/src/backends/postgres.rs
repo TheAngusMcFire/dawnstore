@@ -173,7 +173,6 @@ impl PostgresBackend {
             apply_impl::check_foreign_keys(
                 &mut con,
                 &self.foreign_key_cache,
-                &string_ids,
                 &obj,
                 api_version,
                 kind,
