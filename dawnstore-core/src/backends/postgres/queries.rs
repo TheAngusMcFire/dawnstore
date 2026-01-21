@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use sqlx::{PgConnection, QueryBuilder};
 
 use crate::backends::postgres::data_models::{ForeignKeyConstraint, Object, ObjectInfo, ObjectSchema, Relation};
