@@ -2,17 +2,16 @@ use std::collections::{BTreeMap, HashMap};
 
 use chrono::Utc;
 use serde_json::Value;
-use sqlx::{PgConnection, Pool, Postgres, migrate::MigrateError};
+use sqlx::PgConnection;
 use tokio::sync::RwLock;
-use uuid::Uuid;
 
 use crate::{
     backends::postgres::{
-        data_models::{ForeignKeyConstraint, Object, ObjectSchema},
+        data_models::{ForeignKeyConstraint, Object},
         queries,
     },
     error::DawnStoreError,
-    models::{ForeignKey, ForeignKeyType},
+    models::ForeignKeyType,
 };
 
 use dawnstore_lib::*;
@@ -228,7 +227,7 @@ pub async fn maintain_objects(
     input_objects_with_string_id: Vec<(String, dawnstore_lib::Object<Value>)>,
 ) -> Result<Vec<Object>, DawnStoreError> {
     let mut database_objects = Vec::<Object>::with_capacity(input_objects_with_string_id.len());
-    let object_infos = queries::get_object_infos(con.as_mut(), string_ids.as_slice()).await?;
+    let object_infos = queries::get_object_infos(con, string_ids.as_slice()).await?;
     let object_infos = object_infos
         .iter()
         .map(|x| (&x.string_id, (&x.id, &x.created_at)))
@@ -256,6 +255,6 @@ pub async fn maintain_objects(
         };
         database_objects.push(new_obj);
     }
-    queries::insert_or_update_multiple_objects(con.as_mut(), &database_objects).await?;
+    queries::insert_or_update_multiple_objects(con, &database_objects).await?;
     Ok(database_objects)
 }

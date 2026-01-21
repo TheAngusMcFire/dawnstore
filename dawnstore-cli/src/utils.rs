@@ -1,7 +1,7 @@
 use std::{
     io::Write,
     path::Path,
-    process::{Child, Command},
+    process::Command,
     time::SystemTime,
 };
 

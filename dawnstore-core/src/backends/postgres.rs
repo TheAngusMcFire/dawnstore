@@ -1,15 +1,13 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 
-use chrono::Utc;
-use serde_json::Value;
-use sqlx::{PgConnection, Pool, Postgres, migrate::MigrateError};
+use sqlx::{Pool, Postgres, migrate::MigrateError};
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
 use crate::{
-    backends::postgres::data_models::{ForeignKeyConstraint, Object, ObjectSchema},
+    backends::postgres::data_models::{ForeignKeyConstraint, ObjectSchema},
     error::DawnStoreError,
-    models::{ForeignKey, ForeignKeyType},
+    models::ForeignKey,
 };
 
 use dawnstore_lib::*;

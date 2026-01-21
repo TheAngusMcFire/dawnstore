@@ -3,7 +3,7 @@ use std::io::Write;
 use clap::Parser;
 use color_eyre::eyre::{OptionExt, bail};
 use dawnstore_lib::*;
-use serde_json::{Map, Value};
+use serde_json::Value;
 use tempfile::NamedTempFile;
 
 mod args;
@@ -34,7 +34,7 @@ async fn main() -> color_eyre::Result<()> {
             }
         }
         args::Commands::Get { resource } => {
-            let mut filter = GetObjectsFilter {
+            let filter = GetObjectsFilter {
                 namespace: if args.all_namespaces {
                     None
                 } else {
@@ -65,8 +65,8 @@ async fn main() -> color_eyre::Result<()> {
             }
         }
         args::Commands::Delete {
-            resource,
-            item_name,
+            resource: _,
+            item_name: _,
         } => todo!(),
         args::Commands::Edit {
             resource,
