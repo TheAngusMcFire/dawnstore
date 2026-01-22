@@ -1,11 +1,11 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use sqlx::{Pool, Postgres, migrate::MigrateError};
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
 use crate::{
-    backends::postgres::data_models::{ForeignKeyConstraint, ObjectSchema},
+    backends::postgres::data_models::{ForeignKeyConstraint, ObjectInfo, ObjectSchema, Relation},
     error::DawnStoreError,
     models::ForeignKey,
 };
@@ -144,6 +144,7 @@ impl PostgresBackend {
         // validate if objects have all required fields and if the underlying schema is sound
         let mut string_ids = Vec::<String>::with_capacity(input_objects.len());
         let mut input_objects_with_string_id = Vec::<(String, ObjectAny)>::new();
+        let mut all_fks = HashMap::<String, Vec<(Vec<String>, Uuid)>>::default();
 
         // let mut schema_cache = self.schema_cache.read().await;
         for obj in input_objects {
@@ -156,7 +157,6 @@ impl PostgresBackend {
             let ns = obj.namespace.as_deref().unwrap_or("default");
             let object_id = format!("{api_version}/{kind}");
             let string_id = format!("{}/{}/{}", ns, kind, obj.name,);
-            string_ids.push(string_id.clone());
 
             let mut con = self.pool.acquire().await?;
             apply_impl::validate_object_schema(
@@ -181,15 +181,58 @@ impl PostgresBackend {
             )
             .await?;
 
-            // string_ids.push(string_id.clone());
-            input_objects_with_string_id.push((string_id, obj));
+            string_ids.push(string_id.clone());
+            input_objects_with_string_id.push((string_id.clone(), obj));
+            all_fks.insert(string_id, fks);
         }
 
+        let mut all_string_ids = HashSet::<&str>::new();
+        string_ids.iter().for_each(|x| {
+            all_string_ids.insert(x.as_str());
+        });
+        all_fks.values().for_each(|x| {
+            x.iter().for_each(|(ids, _)| {
+                ids.iter().for_each(|x| {
+                    all_string_ids.insert(x.as_str());
+                });
+            });
+        });
+        let all_string_ids = all_string_ids
+            .into_iter()
+            .map(|x| x.to_owned())
+            .collect::<Vec<String>>();
+
         let mut con = self.pool.begin().await?;
+        let object_infos = queries::get_object_infos(con.as_mut(), all_string_ids.as_slice())
+            .await?
+            .into_iter()
+            .map(|x| (x.string_id.clone(), x))
+            .collect::<HashMap<String, ObjectInfo>>();
         let database_objects =
-            apply_impl::maintain_objects(con.as_mut(), string_ids, input_objects_with_string_id)
+            apply_impl::maintain_objects(con.as_mut(), &object_infos, input_objects_with_string_id)
                 .await?;
         con.commit().await?;
+
+        let mut foreign_key_objects = Vec::<Relation>::new();
+        for (object_id, fks) in &all_fks {
+            let Some(oi) = object_infos.get(object_id) else {
+                return Err(DawnStoreError::ForeignKeyNotFound(object_id.clone()));
+            };
+            for (string_ids, fk_id) in fks {
+                for sid in string_ids {
+                    let Some(foi) = object_infos.get(sid) else {
+                        return Err(DawnStoreError::ForeignKeyNotFound(sid.clone()));
+                    };
+                    foreign_key_objects.push(Relation {
+                        object_id: oi.id,
+                        foreign_object_id: foi.id,
+                        foreign_key_id: *fk_id,
+                    });
+                }
+            }
+        }
+
+        dbg!(foreign_key_objects);
 
         Ok(database_objects
             .into_iter()

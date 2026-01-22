@@ -7,6 +7,8 @@ use crate::models::ForeignKeyType;
 pub enum DawnStoreError {
     #[error("Unexpected input Root object allowed are object and array")]
     InvalidRootInputObject,
+    #[error("Something unexpected happened: {0}")]
+    InternalServerError(String),
     #[error("Unexpected input object missing kind field")]
     InvalidInputObjectMissingKindField,
     #[error("Unexpected input object list missing the list field")]
@@ -17,6 +19,8 @@ pub enum DawnStoreError {
     KindMissingInObject,
     #[error("ApiVersion field is missing in object")]
     ApiVersionMissingInObject,
+    #[error("Foreign key {0} not found")]
+    ForeignKeyNotFound(String),
     #[error("No Schema for object version: {api_version} kind: {kind} found")]
     NoSchemaForObjectFound { api_version: String, kind: String },
     #[error("Database Error: {0}")]

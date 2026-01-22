@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use crate::{
     backends::postgres::{
-        data_models::{ForeignKeyConstraint, Object},
+        data_models::{ForeignKeyConstraint, Object, ObjectInfo},
         queries,
     },
     error::DawnStoreError,
@@ -156,7 +156,7 @@ pub async fn check_foreign_keys(
             (ForeignKeyType::OneOptional, Value::Null) => vec![],
             (ForeignKeyType::OneOptional, Value::String(x)) => vec![x],
             (ForeignKeyType::OneOrMany, Value::String(x)) => vec![x],
-            (ForeignKeyType::OneOrMany, Value::Array(values)) => values
+            (ForeignKeyType::OneOrMany, Value::Array(values)) if !values.is_empty() => values
                 .iter()
                 .filter_map(|x| match x {
                     Value::String(x) => Some(x),
@@ -228,19 +228,14 @@ pub async fn check_foreign_keys(
 
 pub async fn maintain_objects(
     con: &mut PgConnection,
-    string_ids: Vec<String>,
+    object_infos: &HashMap<String, ObjectInfo>,
     input_objects_with_string_id: Vec<(String, dawnstore_lib::Object<Value>)>,
 ) -> Result<Vec<Object>, DawnStoreError> {
     let mut database_objects = Vec::<Object>::with_capacity(input_objects_with_string_id.len());
-    let object_infos = queries::get_object_infos(con, string_ids.as_slice()).await?;
-    let object_infos = object_infos
-        .iter()
-        .map(|x| (&x.string_id, (&x.id, &x.created_at)))
-        .collect::<BTreeMap<_, _>>();
     for (string_id, obj) in input_objects_with_string_id {
         let oi = object_infos.get(&string_id);
         let (id, created_at) = match &oi {
-            Some((id, created_at)) => (**id, **created_at),
+            Some(oi) => (oi.id, oi.created_at),
             None => (uuid::Uuid::new_v4(), Utc::now()),
         };
         let new_obj = Object {
