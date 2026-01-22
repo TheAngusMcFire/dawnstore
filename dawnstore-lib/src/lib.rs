@@ -1,8 +1,9 @@
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
+use schemars::JsonSchema;
 
-#[derive(serde::Serialize, serde::Deserialize, Debug)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, JsonSchema)]
 pub struct ObjectOwner {
     pub api_version: String,
     pub kind: String,
@@ -39,7 +40,7 @@ pub type ObjectAny = Object<serde_json::Value>;
 pub type ReturnAny = ReturnObject<serde_json::Value>;
 pub type Metadata = Object<Option<()>>;
 
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Debug, serde::Serialize, serde::Deserialize, JsonSchema)]
 pub struct ReturnObject<T> {
     pub id: uuid::Uuid,
     pub created_at: DateTime<Utc>,

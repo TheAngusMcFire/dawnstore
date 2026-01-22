@@ -48,6 +48,8 @@ async fn main() -> color_eyre::Result<()> {
                 name: None,
                 page: None,
                 page_size: None,
+                fill_child_foreign_keys: false,
+                fill_parent_foreign_keys: false,
             };
             let rd = api.get_objects(&filter).await?;
             println!(
@@ -78,6 +80,8 @@ async fn main() -> color_eyre::Result<()> {
                 name: Some(item_name.clone()),
                 page: None,
                 page_size: None,
+                fill_child_foreign_keys: true,
+                fill_parent_foreign_keys: true,
             };
             let mut rd = api.get_objects(&filter).await?;
             let Some(obj) = rd.pop() else {

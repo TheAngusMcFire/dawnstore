@@ -71,7 +71,7 @@ pub struct Container {
     pub nr: u32,
     pub notes: Option<String>,
     pub parent: Option<String>,
-    #[schemars(skip)]
+    // #[schemars(skip)]
     pub parent_object: Option<ReturnObject<Box<Container>>>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     #[serde(default)]

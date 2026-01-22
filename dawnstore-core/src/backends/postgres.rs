@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
+use serde_json::Value;
 use sqlx::{Pool, Postgres, migrate::MigrateError};
 use tokio::sync::RwLock;
 use uuid::Uuid;
@@ -108,27 +109,22 @@ impl PostgresBackend {
             .map(|x| x.foreign_object_id)
             .collect::<Vec<_>>();
 
-        let foreign_objects: HashMap<String, ReturnAny> =
+        let foreign_objects: Vec<ReturnAny> =
             queries::get_objects(con.as_mut(), foreign_objects.as_slice())
                 .await?
                 .into_iter()
-                .map(|x| {
-                    (
-                        format!("{}/{}/{}", x.namespace, x.kind, x.name),
-                        ReturnAny {
-                            id: x.id,
-                            namespace: x.namespace,
-                            api_version: x.api_version,
-                            kind: x.kind,
-                            name: x.name,
-                            created_at: x.created_at,
-                            updated_at: x.updated_at,
-                            annotations: Some(x.annotations.0),
-                            labels: Some(x.labels.0),
-                            owners: None,
-                            spec: x.spec.0,
-                        },
-                    )
+                .map(|x| ReturnAny {
+                    id: x.id,
+                    namespace: x.namespace,
+                    api_version: x.api_version,
+                    kind: x.kind,
+                    name: x.name,
+                    created_at: x.created_at,
+                    updated_at: x.updated_at,
+                    annotations: Some(x.annotations.0),
+                    labels: Some(x.labels.0),
+                    owners: None,
+                    spec: x.spec.0,
                 })
                 .collect();
 
@@ -153,12 +149,57 @@ impl PostgresBackend {
         for obj in &mut objects {
             let obj: &mut ReturnAny = obj;
             let type_id = format!("{}/{}", obj.api_version, obj.kind);
-            let string_id = format!("{}/{}/{}", obj.namespace, obj.kind, obj.name);
+            // let string_id = format!("{}/{}/{}", obj.namespace, obj.kind, obj.name);
             let Some(x) = fk_cache.get(&type_id) else {
                 return Err(DawnStoreError::InternalServerError(
                     "foreign key cache entry not found".to_string(),
                 ));
             };
+            for fkc in x {
+                let fk_ids = relations
+                    .iter()
+                    .filter(|x| x.foreign_key_id == fkc.id)
+                    .collect::<Vec<_>>();
+
+                let mut objs = foreign_objects
+                    .iter()
+                    .filter(|o| fk_ids.iter().any(|x| x.foreign_object_id == o.id))
+                    .collect::<Vec<_>>();
+
+                let obj_path = format!("{}_object", fkc.key_path);
+                let mut path_segments = obj_path.split(".").collect::<Vec<_>>();
+                let last_segment = path_segments.pop();
+                let mut key_position = &mut obj.spec;
+                for seg in path_segments {
+                    let k = key_position.get(seg).is_none();
+
+                    if k {
+                        if let Value::Object(x) = key_position {
+                            x.insert(seg.to_string(), Value::Object(Default::default()));
+                        } else {
+                            return Err(DawnStoreError::InternalServerError(
+                                "unexpected json value of field".to_string(),
+                            ));
+                        }
+                    };
+
+                    key_position = key_position.get_mut(seg).unwrap()
+                }
+
+                if let (Some(seg), Value::Object(x)) = (last_segment, key_position) {
+                    let value = match fkc.r#type {
+                        crate::models::ForeignKeyType::One => serde_json::to_value(objs.pop())?,
+                        crate::models::ForeignKeyType::OneOptional => {
+                            serde_json::to_value(objs.pop())?
+                        }
+                        crate::models::ForeignKeyType::OneOrMany => serde_json::to_value(objs)?,
+                        crate::models::ForeignKeyType::NoneOrMany => {
+                            serde_json::to_value(objs.pop())?
+                        }
+                    };
+                    x.insert(seg.to_string(), value);
+                }
+            }
         }
 
         Ok(objects)
@@ -249,7 +290,7 @@ impl PostgresBackend {
             .collect::<Vec<String>>();
 
         let mut con = self.pool.begin().await?;
-        let object_infos = queries::get_object_infos(con.as_mut(), all_string_ids.as_slice())
+        let mut object_infos = queries::get_object_infos(con.as_mut(), all_string_ids.as_slice())
             .await?
             .into_iter()
             .map(|x| (x.string_id.clone(), x))
@@ -261,6 +302,17 @@ impl PostgresBackend {
         let database_objects =
             apply_impl::maintain_objects(con.as_mut(), &object_infos, input_objects_with_string_id)
                 .await?;
+        database_objects.iter().for_each(|x| {
+            let string_id = format!("{}/{}/{}", x.namespace, x.kind, x.name);
+            object_infos.insert(
+                string_id.clone(),
+                ObjectInfo {
+                    id: x.id,
+                    string_id,
+                    created_at: x.created_at,
+                },
+            );
+        });
 
         let mut foreign_key_objects = Vec::<Relation>::new();
         for (object_id, fks) in &all_fks {
