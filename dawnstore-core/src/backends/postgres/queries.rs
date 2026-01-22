@@ -419,6 +419,23 @@ pub async fn get_relation(
     .await
 }
 
+pub async fn get_relations_of_objects(
+    pool: &mut PgConnection,
+    object_ids: &[Uuid],
+) -> Result<Vec<Relation>, sqlx::Error> {
+    sqlx::query_as!(
+        Relation,
+        r#"
+        SELECT object_id, foreign_object_id, foreign_key_id 
+        FROM relations 
+        WHERE object_id = ANY($1)
+        "#,
+        object_ids,
+    )
+    .fetch_all(pool)
+    .await
+}
+
 /// Inserts the current Relation instance into the database
 pub async fn insert_relation(pool: &mut PgConnection, relation: &Relation) -> Result<(), sqlx::Error> {
     sqlx::query!(
@@ -476,8 +493,39 @@ pub async fn insert_multiple_relation(
          .push_bind(rel.foreign_key_id);
     });
 
+    query_builder.push(
+        " ON CONFLICT (object_id, foreign_object_id, foreign_key_id) DO NOTHING "
+    );
+
     let query = query_builder.build();
     query.execute(pool).await?;
 
     Ok(())
+}
+
+
+pub async fn delete_multiple_relations(
+    pool: &mut PgConnection,
+    object_ids: &[Uuid],
+    foreign_object_ids: &[Uuid],
+    foreign_key_ids: &[Uuid],
+) -> Result<u64, sqlx::Error> {
+    assert_eq!(object_ids.len(), foreign_object_ids.len());
+    assert_eq!(object_ids.len(), foreign_key_ids.len());
+
+    let result = sqlx::query!(
+        r#"
+        DELETE FROM relations
+        WHERE (object_id, foreign_object_id, foreign_key_id) IN (
+            SELECT * FROM UNNEST($1::uuid[], $2::uuid[], $3::uuid[])
+        )
+        "#,
+        object_ids,
+        foreign_object_ids,
+        foreign_key_ids
+    )
+    .execute(pool)
+    .await?;
+
+    Ok(result.rows_affected())
 }

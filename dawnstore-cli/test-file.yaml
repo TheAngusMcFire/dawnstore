@@ -55,7 +55,7 @@ list:
       parent: *kitchen,
       notes: "the white ikea shelf",
     }
-  - { nr: 1, name: Weizenmehl, parent: *kitchen-shelf1 }
+  - { nr: 1, name: Weizenmehl, parent: null }
   - { nr: 2, name: Langkorn Reis, parent: *kitchen-shelf1 }
   - { nr: 3, name: Jasmin Reis, parent: *kitchen-shelf1 }
   - { nr: 4, name: Sushi Reis, parent: *kitchen-shelf1 }

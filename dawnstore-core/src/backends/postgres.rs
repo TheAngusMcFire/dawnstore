@@ -208,10 +208,13 @@ impl PostgresBackend {
             .into_iter()
             .map(|x| (x.string_id.clone(), x))
             .collect::<HashMap<String, ObjectInfo>>();
+        let all_object_db_ids = all_fks
+            .keys()
+            .filter_map(|x| object_infos.get(x).map(|x| x.id))
+            .collect::<Vec<_>>();
         let database_objects =
             apply_impl::maintain_objects(con.as_mut(), &object_infos, input_objects_with_string_id)
                 .await?;
-        con.commit().await?;
 
         let mut foreign_key_objects = Vec::<Relation>::new();
         for (object_id, fks) in &all_fks {
@@ -231,8 +234,40 @@ impl PostgresBackend {
                 }
             }
         }
+        let existing_relations =
+            queries::get_relations_of_objects(con.as_mut(), all_object_db_ids.as_slice()).await?;
+        let relations_to_delete = existing_relations
+            .into_iter()
+            .filter(|x| {
+                !foreign_key_objects.iter().any(|y| {
+                    y.object_id == x.object_id
+                        && y.foreign_object_id == x.foreign_object_id
+                        && y.foreign_key_id == x.foreign_key_id
+                })
+            })
+            .collect::<Vec<_>>();
+        let object_ids_to_delete = relations_to_delete
+            .iter()
+            .map(|x| x.object_id)
+            .collect::<Vec<_>>();
+        let fk_ids_to_delete = relations_to_delete
+            .iter()
+            .map(|x| x.foreign_key_id)
+            .collect::<Vec<_>>();
+        let fko_ids_to_delete = relations_to_delete
+            .iter()
+            .map(|x| x.foreign_object_id)
+            .collect::<Vec<_>>();
 
-        dbg!(foreign_key_objects);
+        queries::delete_multiple_relations(
+            con.as_mut(),
+            object_ids_to_delete.as_slice(),
+            fko_ids_to_delete.as_slice(),
+            fk_ids_to_delete.as_slice(),
+        )
+        .await?;
+        queries::insert_multiple_relation(con.as_mut(), foreign_key_objects.as_slice()).await?;
+        con.commit().await?;
 
         Ok(database_objects
             .into_iter()
