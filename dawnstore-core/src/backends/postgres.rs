@@ -98,8 +98,41 @@ impl PostgresBackend {
         &self,
         filter: &GetObjectsFilter,
     ) -> Result<Vec<ReturnObject<serde_json::Value>>, DawnStoreError> {
-        let objs = queries::get_objects_by_filter(&self.pool, filter).await?;
-        Ok(objs
+        let mut con = self.pool.acquire().await?;
+        let objs = queries::get_objects_by_filter(con.as_mut(), filter).await?;
+
+        let obj_ids = objs.iter().map(|x| x.id).collect::<Vec<_>>();
+        let relations = queries::get_relations_of_objects(con.as_mut(), obj_ids.as_slice()).await?;
+        let foreign_objects = relations
+            .iter()
+            .map(|x| x.foreign_object_id)
+            .collect::<Vec<_>>();
+
+        let foreign_objects: HashMap<String, ReturnAny> =
+            queries::get_objects(con.as_mut(), foreign_objects.as_slice())
+                .await?
+                .into_iter()
+                .map(|x| {
+                    (
+                        format!("{}/{}/{}", x.namespace, x.kind, x.name),
+                        ReturnAny {
+                            id: x.id,
+                            namespace: x.namespace,
+                            api_version: x.api_version,
+                            kind: x.kind,
+                            name: x.name,
+                            created_at: x.created_at,
+                            updated_at: x.updated_at,
+                            annotations: Some(x.annotations.0),
+                            labels: Some(x.labels.0),
+                            owners: None,
+                            spec: x.spec.0,
+                        },
+                    )
+                })
+                .collect();
+
+        let mut objects = objs
             .into_iter()
             .map(|x| ReturnAny {
                 id: x.id,
@@ -111,11 +144,24 @@ impl PostgresBackend {
                 updated_at: x.updated_at,
                 annotations: Some(x.annotations.0),
                 labels: Some(x.labels.0),
-                // todo set the owners
-                owners: Some(Default::default()),
+                owners: None,
                 spec: x.spec.0,
             })
-            .collect())
+            .collect();
+
+        let fk_cache = self.foreign_key_cache.read().await;
+        for obj in &mut objects {
+            let obj: &mut ReturnAny = obj;
+            let type_id = format!("{}/{}", obj.api_version, obj.kind);
+            let string_id = format!("{}/{}/{}", obj.namespace, obj.kind, obj.name);
+            let Some(x) = fk_cache.get(&type_id) else {
+                return Err(DawnStoreError::InternalServerError(
+                    "foreign key cache entry not found".to_string(),
+                ));
+            };
+        }
+
+        Ok(objects)
     }
 
     pub async fn get_resource_definition(
@@ -234,8 +280,10 @@ impl PostgresBackend {
                 }
             }
         }
+
         let existing_relations =
             queries::get_relations_of_objects(con.as_mut(), all_object_db_ids.as_slice()).await?;
+
         let relations_to_delete = existing_relations
             .into_iter()
             .filter(|x| {

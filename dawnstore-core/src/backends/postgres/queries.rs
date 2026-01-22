@@ -316,9 +316,15 @@ pub async fn update_multiple_objects(pool: &mut PgConnection, items: &[Object]) 
     Ok(())
 }
 
-pub async fn get_object(pool: &sqlx::PgPool, id: uuid::Uuid) -> Result<Option<Object>, sqlx::Error> {
+pub async fn get_object(pool: &mut PgConnection, id: uuid::Uuid) -> Result<Option<Object>, sqlx::Error> {
     sqlx::query_as!(Object, "SELECT id, string_id, api_version, name, kind, created_at, updated_at, namespace, annotations as \"annotations: _\", labels as \"labels: _\", owners, spec as \"spec: _\" FROM objects WHERE id = $1", id)
         .fetch_optional(pool)
+        .await
+}
+
+pub async fn get_objects(pool: &mut PgConnection, ids: &[uuid::Uuid]) -> Result<Vec<Object>, sqlx::Error> {
+    sqlx::query_as!(Object, "SELECT id, string_id, api_version, name, kind, created_at, updated_at, namespace, annotations as \"annotations: _\", labels as \"labels: _\", owners, spec as \"spec: _\" FROM objects WHERE id = ANY($1)", ids)
+        .fetch_all(pool)
         .await
 }
 
@@ -330,7 +336,7 @@ pub async fn object_exists(pool: &mut PgConnection, string_id: &str) -> Result<b
         .map(|x| x.is_some())
 }
 
-pub async fn get_objects_by_filter(pool: &sqlx::PgPool, filter: &GetObjectsFilter) -> Result<Vec<Object>, sqlx::Error> {
+pub async fn get_objects_by_filter(pool: &mut PgConnection, filter: &GetObjectsFilter) -> Result<Vec<Object>, sqlx::Error> {
     let mut query_builder: sqlx::QueryBuilder<sqlx::Postgres> = sqlx::QueryBuilder::new(
         "SELECT id, string_id, api_version, name, kind, created_at, updated_at, namespace, annotations, labels, owners, spec FROM objects where true "
     );

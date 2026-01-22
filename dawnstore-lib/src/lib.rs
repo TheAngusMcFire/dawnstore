@@ -72,6 +72,8 @@ pub struct GetObjectsFilter {
     pub namespace: Option<String>,
     pub kind: Option<String>,
     pub name: Option<String>,
+    pub fill_child_foreign_keys: bool,
+    pub fill_parent_foreign_keys: bool,
     pub page: Option<usize>,
     pub page_size: Option<usize>,
 }
