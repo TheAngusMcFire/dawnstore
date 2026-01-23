@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, string_id, api_version, name, kind, created_at, updated_at, namespace, annotations as \"annotations: _\", labels as \"labels: _\", owners, spec as \"spec: _\" FROM objects WHERE id = ANY($1)",
+  "query": "SELECT id, string_id, api_version, name, kind, created_at, updated_at, namespace, annotations as \"annotations: _\", labels as \"labels: _\", spec as \"spec: _\" FROM objects WHERE id = ANY($1)",
   "describe": {
     "columns": [
       {
@@ -55,11 +55,6 @@
       },
       {
         "ordinal": 10,
-        "name": "owners",
-        "type_info": "UuidArray"
-      },
-      {
-        "ordinal": 11,
         "name": "spec: _",
         "type_info": "Jsonb"
       }
@@ -80,9 +75,8 @@
       false,
       false,
       false,
-      false,
       false
     ]
   },
-  "hash": "937d5052d71c734af93ef6fa052f677fe4b401b0e96a7dcd8f6657000e90e784"
+  "hash": "325a8d92d63aa79808b35803dad9f05d523d589a8d8111ee420b88698be248f3"
 }

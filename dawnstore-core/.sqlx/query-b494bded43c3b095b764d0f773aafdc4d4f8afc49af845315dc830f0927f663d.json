@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "UPDATE objects SET api_version = $2, name = $3, kind = $4, updated_at = $5, namespace = $6, annotations = $7, labels = $8, owners = $9, spec = $10 WHERE id = $1",
+  "query": "INSERT INTO objects (id, api_version, name, kind, created_at, updated_at, namespace, annotations, labels, spec) \n         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
   "describe": {
     "columns": [],
     "parameters": {
@@ -10,14 +10,14 @@
         "Text",
         "Text",
         "Timestamptz",
+        "Timestamptz",
         "Text",
         "Jsonb",
         "Jsonb",
-        "UuidArray",
         "Jsonb"
       ]
     },
     "nullable": []
   },
-  "hash": "7dc8f96846ab597ed4266424debf54aac27a0f300cd6ca597837ca76c8f50ab1"
+  "hash": "b494bded43c3b095b764d0f773aafdc4d4f8afc49af845315dc830f0927f663d"
 }

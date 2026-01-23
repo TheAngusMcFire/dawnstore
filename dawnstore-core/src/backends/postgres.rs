@@ -24,6 +24,10 @@ pub struct PostgresBackend {
 }
 
 impl PostgresBackend {
+    pub fn get_pool(&self) -> &Pool<Postgres> {
+        &self.pool
+    }
+
     pub async fn new_from_connection_string(
         connection_string: impl Into<String>,
     ) -> Result<Self, DawnStoreError> {
