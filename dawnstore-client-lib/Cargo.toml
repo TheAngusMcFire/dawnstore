@@ -7,4 +7,5 @@ edition = "2024"
 serde_json.workspace = true
 reqwest = { version = "0.13", features = ["json"] }
 thiserror.workspace = true
+serde.workspace = true
 dawnstore-lib = { path = "../dawnstore-lib" }

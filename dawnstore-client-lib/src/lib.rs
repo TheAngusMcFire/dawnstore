@@ -1,5 +1,6 @@
 use dawnstore_lib::*;
-use reqwest::Client;
+use reqwest::{Client, IntoUrl};
+use serde::{Serialize, de::DeserializeOwned};
 
 #[derive(thiserror::Error, Debug)]
 pub enum DawnstoreApiError {
@@ -115,5 +116,20 @@ impl Api {
         } else {
             Err(DawnstoreApiError::ApiError(i.status(), i.text().await?))
         }
+    }
+
+    pub async fn reqwest_exchange<Treq: Serialize, Tres: DeserializeOwned>(
+        &self,
+        url: impl FnOnce(&str) -> String,
+        req: &Treq,
+    ) -> Result<Tres, DawnstoreApiError> {
+        let resp = reqwest::Client::new()
+            .post(url(self.get_base_url()))
+            .json(req)
+            .send()
+            .await?
+            .json::<Tres>()
+            .await?;
+        Ok(resp)
     }
 }
