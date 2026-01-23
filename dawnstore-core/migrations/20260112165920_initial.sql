@@ -24,7 +24,7 @@ CREATE TABLE foreign_key_constraints (
     foreign_key_kind TEXT
 );
 
-CREATE UNIQUE INDEX idx_foreign_key_constraints_lookup ON foreign_key_constraints (api_version, kind);
+CREATE UNIQUE INDEX idx_foreign_key_constraints_lookup ON foreign_key_constraints (api_version, kind, key_path);
 
 CREATE TABLE object_schemas (
     id UUID PRIMARY KEY,
