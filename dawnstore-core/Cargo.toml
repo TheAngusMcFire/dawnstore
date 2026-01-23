@@ -5,6 +5,7 @@ edition = "2024"
 
 [features]
 default = ["postgres"]
+axum = ["dep:axum"]
 postgres = ["dep:sqlx"]
 etcd = []
 
@@ -21,6 +22,7 @@ schemars.workspace = true
 jsonschema.workspace = true
 dawnstore-lib = { path = "../dawnstore-lib" }
 sqlx = { workspace = true, optional = true }
+axum = { workspace = true, optional = true }
 
 [dev-dependencies]
 tracing-subscriber = { version = "0.3" }

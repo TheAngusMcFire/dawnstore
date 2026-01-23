@@ -1,4 +1,4 @@
-use dawnstore_lib::ReturnObject;
+pub use dawnstore_lib::*;
 
 pub struct ForeignKey {
     pub path: String,

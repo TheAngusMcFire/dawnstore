@@ -1,18 +1,11 @@
 use std::sync::Arc;
 
-use axum::{
-    Json, Router,
-    extract::State,
-    http::StatusCode,
-    response::{IntoResponse, Response},
-    routing::{delete, post},
-};
+use axum::Router;
 use color_eyre::eyre;
 use dawnstore_core::{
     backends::postgres::PostgresBackend,
     models::{Container, ForeignKey, ForeignKeyType},
 };
-use dawnstore_lib::*;
 use sqlx::PgPool;
 use tokio::net::TcpListener;
 
@@ -22,7 +15,9 @@ async fn main() -> eyre::Result<()> {
     let connection_string = std::env::var("DATABASE_URL")?;
     let pool = PgPool::connect(&connection_string).await?;
     let backend = PostgresBackend::new(pool);
+
     backend.sqlx_migrate().await?;
+
     backend
         .seed_object_schema::<Container>(
             "v2",
@@ -37,72 +32,13 @@ async fn main() -> eyre::Result<()> {
         )
         .await?;
 
-    let app = Router::new()
-        .route("/apply", post(apply))
-        .route("/get-objects", post(get_objects))
-        .route("/get-resource-definitions", post(get_resource_definitions))
-        .route("/delete-object", delete(delete_object))
-        .with_state(ApiState {
-            backend: Arc::new(backend),
-        });
+    let backend = Arc::new(backend);
+
+    let dawnstore_routes = dawnstore_core::controllers::get_dawnstore_default_routes(backend);
+    let app = Router::new().merge(dawnstore_routes);
+
     let listener = TcpListener::bind("::0:8080").await.unwrap();
     tracing::info!("listening on {}", listener.local_addr().unwrap());
     axum::serve(listener, app).await?;
-
     Ok(())
-}
-
-#[derive(Clone)]
-struct ApiState {
-    backend: Arc<PostgresBackend>,
-}
-
-async fn apply(State(state): State<ApiState>, Json(obj): Json<serde_json::Value>) -> Response {
-    match state.backend.apply_raw(obj).await {
-        Ok(x) => Json(x).into_response(),
-        Err(y) => {
-            let mut resp = format!("{y}:{y:?}").into_response();
-            *resp.status_mut() = StatusCode::BAD_REQUEST;
-            resp
-        }
-    }
-}
-
-async fn get_objects(
-    State(state): State<ApiState>,
-    Json(query): Json<GetObjectsFilter>,
-) -> Response {
-    match state.backend.get(&query).await {
-        Ok(x) => Json(x).into_response(),
-        Err(y) => {
-            let mut resp = format!("{y:?}").into_response();
-            *resp.status_mut() = StatusCode::BAD_REQUEST;
-            resp
-        }
-    }
-}
-
-async fn get_resource_definitions(
-    State(state): State<ApiState>,
-    Json(query): Json<GetResourceDefinitionFilter>,
-) -> Response {
-    match state.backend.get_resource_definition(&query).await {
-        Ok(x) => Json(x).into_response(),
-        Err(y) => {
-            let mut resp = format!("{y:?}").into_response();
-            *resp.status_mut() = StatusCode::BAD_REQUEST;
-            resp
-        }
-    }
-}
-
-async fn delete_object(State(state): State<ApiState>, Json(query): Json<DeleteObject>) -> Response {
-    match state.backend.delete(&query).await {
-        Ok(x) => Json(x).into_response(),
-        Err(y) => {
-            let mut resp = format!("{y:?}").into_response();
-            *resp.status_mut() = StatusCode::BAD_REQUEST;
-            resp
-        }
-    }
 }

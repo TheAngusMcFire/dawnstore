@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use serde_json::Value;
-use sqlx::{Pool, Postgres, migrate::MigrateError};
+use sqlx::{PgPool, Pool, Postgres, migrate::MigrateError};
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
@@ -24,6 +24,14 @@ pub struct PostgresBackend {
 }
 
 impl PostgresBackend {
+    pub async fn new_from_connection_string(
+        connection_string: impl Into<String>,
+    ) -> Result<Self, DawnStoreError> {
+        let connection_string = connection_string.into();
+        let pool = PgPool::connect(&connection_string).await?;
+        Ok(Self::new(pool))
+    }
+
     pub fn new(pool: Pool<Postgres>) -> Self {
         PostgresBackend {
             pool,

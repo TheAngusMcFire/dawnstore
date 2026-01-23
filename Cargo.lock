@@ -573,6 +573,7 @@ dependencies = [
 name = "dawnstore-core"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "chrono",
  "dawnstore-lib",
  "jsonschema",
