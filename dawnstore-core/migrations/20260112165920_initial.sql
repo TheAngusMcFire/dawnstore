@@ -47,7 +47,6 @@ CREATE TABLE objects (
     namespace TEXT NOT NULL,
     annotations JSONB NOT NULL DEFAULT '{}'::jsonb,
     labels JSONB NOT NULL DEFAULT '{}'::jsonb,
-    owners UUID[] NOT NULL DEFAULT '{}',
     spec JSONB NOT NULL
 );
 

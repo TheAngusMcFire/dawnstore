@@ -42,7 +42,6 @@ pub struct Object {
     pub namespace: String,
     pub annotations: Json<BTreeMap<String, String>>,
     pub labels: Json<BTreeMap<String, String>>,
-    pub owners: Vec<Uuid>,
     pub spec: Json<serde_json::Value>,
 }
 
@@ -58,4 +57,13 @@ pub struct Relation {
     pub object_id: Uuid,
     pub foreign_object_id: Uuid,
     pub foreign_key_id: Uuid,
+}
+
+#[derive(FromRow, serde::Deserialize, serde::Serialize)]
+pub struct ApiObjectInfo {
+    pub namespace: String,
+    pub id: Uuid,
+    pub api_version: String,
+    pub kind: String,
+    pub name: String,
 }

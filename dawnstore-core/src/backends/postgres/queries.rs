@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 use sqlx::{PgConnection, QueryBuilder};
 
-use crate::backends::postgres::data_models::{ForeignKeyConstraint, Object, ObjectInfo, ObjectSchema, Relation};
+use crate::backends::postgres::data_models::{ApiObjectInfo, ForeignKeyConstraint, Object, ObjectInfo, ObjectSchema, Relation};
 use dawnstore_lib::*;
 
 // foreign key constraint
@@ -195,12 +195,11 @@ pub async fn delete_object_schema(pool: &sqlx::PgPool, id: uuid::Uuid) -> Result
 // objects
 pub async fn insert_object(pool: &sqlx::PgPool, item: &Object) -> Result<(), sqlx::Error> {
     sqlx::query!(
-        "INSERT INTO objects (id, api_version, name, kind, created_at, updated_at, namespace, annotations, labels, owners, spec) 
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
+        "INSERT INTO objects (id, api_version, name, kind, created_at, updated_at, namespace, annotations, labels, spec) 
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
         item.id, item.api_version, item.name, item.kind, item.created_at, item.updated_at, item.namespace, 
         serde_json::to_value(&item.annotations).unwrap(), 
-        serde_json::to_value(&item.labels).unwrap(), 
-        &item.owners, item.spec.0
+        serde_json::to_value(&item.labels).unwrap(), item.spec.0
     )
     .execute(pool)
     .await?;
@@ -212,7 +211,7 @@ pub async fn insert_multiple_objects(pool: &mut PgConnection, items: &[Object]) 
         return Ok(())
     }
     let mut query_builder: sqlx::QueryBuilder<sqlx::Postgres> = sqlx::QueryBuilder::new(
-        "INSERT INTO objects (id, string_id, api_version, name, kind, created_at, updated_at, namespace, annotations, labels, owners, spec) "
+        "INSERT INTO objects (id, string_id, api_version, name, kind, created_at, updated_at, namespace, annotations, labels, spec) "
     );
     query_builder.push_values(items, |mut b, item| {
         b.push_bind(item.id)
@@ -225,7 +224,6 @@ pub async fn insert_multiple_objects(pool: &mut PgConnection, items: &[Object]) 
             .push_bind(&item.namespace)
             .push_bind(serde_json::to_value(&item.annotations).unwrap())
             .push_bind(serde_json::to_value(&item.labels).unwrap())
-            .push_bind(&item.owners)
             .push_bind(&item.spec.0);
     });
     query_builder.build().execute(pool).await?;
@@ -237,7 +235,7 @@ pub async fn insert_or_update_multiple_objects(pool: &mut PgConnection, items: &
         return Ok(())
     }
     let mut query_builder: sqlx::QueryBuilder<sqlx::Postgres> = sqlx::QueryBuilder::new(
-        "INSERT INTO objects (id, string_id, api_version, name, kind, created_at, updated_at, namespace, annotations, labels, owners, spec) "
+        "INSERT INTO objects (id, string_id, api_version, name, kind, created_at, updated_at, namespace, annotations, labels, spec) "
     );
 
     query_builder.push_values(items, |mut b, item| {
@@ -251,7 +249,6 @@ pub async fn insert_or_update_multiple_objects(pool: &mut PgConnection, items: &
             .push_bind(&item.namespace)
             .push_bind(serde_json::to_value(&item.annotations).unwrap())
             .push_bind(serde_json::to_value(&item.labels).unwrap())
-            .push_bind(&item.owners)
             .push_bind(&item.spec.0);
     });
 
@@ -263,7 +260,6 @@ pub async fn insert_or_update_multiple_objects(pool: &mut PgConnection, items: &
     query_builder.push("updated_at = EXCLUDED.updated_at, ");
     query_builder.push("annotations = EXCLUDED.annotations, ");
     query_builder.push("labels = EXCLUDED.labels, ");
-    query_builder.push("owners = EXCLUDED.owners, ");
     query_builder.push("spec = EXCLUDED.spec");
 
     let query = query_builder.build();
@@ -287,7 +283,6 @@ pub async fn update_multiple_objects(pool: &mut PgConnection, items: &[Object]) 
             namespace = v.namespace,
             annotations = v.annotations,
             labels = v.labels,
-            owners = v.owners,
             spec = v.spec
         FROM ( "
     );
@@ -302,12 +297,11 @@ pub async fn update_multiple_objects(pool: &mut PgConnection, items: &[Object]) 
             .push_bind(&item.namespace)
             .push_bind(serde_json::to_value(&item.annotations).unwrap())
             .push_bind(serde_json::to_value(&item.labels).unwrap())
-            .push_bind(&item.owners)
             .push_bind(&item.spec.0);
     });
 
     query_builder.push(
-        ") AS v(id, string_id, api_version, name, kind, updated_at, namespace, annotations, labels, owners, spec) 
+        ") AS v(id, string_id, api_version, name, kind, updated_at, namespace, annotations, labels, spec) 
          WHERE o.id = v.id"
     );
 
@@ -317,13 +311,13 @@ pub async fn update_multiple_objects(pool: &mut PgConnection, items: &[Object]) 
 }
 
 pub async fn get_object(pool: &mut PgConnection, id: uuid::Uuid) -> Result<Option<Object>, sqlx::Error> {
-    sqlx::query_as!(Object, "SELECT id, string_id, api_version, name, kind, created_at, updated_at, namespace, annotations as \"annotations: _\", labels as \"labels: _\", owners, spec as \"spec: _\" FROM objects WHERE id = $1", id)
+    sqlx::query_as!(Object, "SELECT id, string_id, api_version, name, kind, created_at, updated_at, namespace, annotations as \"annotations: _\", labels as \"labels: _\", spec as \"spec: _\" FROM objects WHERE id = $1", id)
         .fetch_optional(pool)
         .await
 }
 
 pub async fn get_objects(pool: &mut PgConnection, ids: &[uuid::Uuid]) -> Result<Vec<Object>, sqlx::Error> {
-    sqlx::query_as!(Object, "SELECT id, string_id, api_version, name, kind, created_at, updated_at, namespace, annotations as \"annotations: _\", labels as \"labels: _\", owners, spec as \"spec: _\" FROM objects WHERE id = ANY($1)", ids)
+    sqlx::query_as!(Object, "SELECT id, string_id, api_version, name, kind, created_at, updated_at, namespace, annotations as \"annotations: _\", labels as \"labels: _\", spec as \"spec: _\" FROM objects WHERE id = ANY($1)", ids)
         .fetch_all(pool)
         .await
 }
@@ -338,7 +332,7 @@ pub async fn object_exists(pool: &mut PgConnection, string_id: &str) -> Result<b
 
 pub async fn get_objects_by_filter(pool: &mut PgConnection, filter: &GetObjectsFilter) -> Result<Vec<Object>, sqlx::Error> {
     let mut query_builder: sqlx::QueryBuilder<sqlx::Postgres> = sqlx::QueryBuilder::new(
-        "SELECT id, string_id, api_version, name, kind, created_at, updated_at, namespace, annotations, labels, owners, spec FROM objects where true "
+        "SELECT id, string_id, api_version, name, kind, created_at, updated_at, namespace, annotations, labels, spec FROM objects where true "
     );
 
     if let Some(x) = &filter.namespace {
@@ -379,13 +373,56 @@ pub async fn get_object_infos(pool: &mut PgConnection, string_ids: &[String]) ->
         .await
 }
 
+pub async fn get_api_object_infos_with_filter(pool: &mut PgConnection, filter: &GetObjectInfosFilter) -> Result<Vec<ApiObjectInfo>, sqlx::Error> {
+    let mut query_builder: sqlx::QueryBuilder<sqlx::Postgres> = sqlx::QueryBuilder::new(
+        "SELECT namespace, id, api_version, name, kind where true "
+    );
+
+    if let Some(x) = &filter.namespace {
+        query_builder.push(" and namespace = ");
+        query_builder.push_bind(x);
+    }
+
+    if let Some(x) = &filter.kind {
+        query_builder.push(" and kind = ");
+        query_builder.push_bind(x);
+    }
+
+    if let Some(x) = &filter.name {
+        query_builder.push(" and name = ");
+        query_builder.push_bind(x);
+    }
+
+    if let Some(x) = &filter.name_search_string {
+        query_builder.push(" and name ilike '%");
+        query_builder.push_bind(x);
+        query_builder.push("%' ");
+    }
+
+    query_builder.push(" order by kind, name ");
+
+    if let Some(x) = &filter.page_size {
+        let size = (*x).min(250);
+        query_builder.push(" limit ");
+        query_builder.push_bind(size as i64);
+    }
+
+    if let Some(x) = &filter.page {
+        let size = filter.page_size.unwrap_or(250);
+        query_builder.push(" offset ");
+        query_builder.push_bind((x * size) as i64);
+    }
+
+    query_builder.build_query_as::<ApiObjectInfo>().fetch_all(pool).await
+}
+
 pub async fn update_object(pool: &sqlx::PgPool, item: &Object) -> Result<(), sqlx::Error> {
     sqlx::query!(
-        "UPDATE objects SET api_version = $2, name = $3, kind = $4, updated_at = $5, namespace = $6, annotations = $7, labels = $8, owners = $9, spec = $10 WHERE id = $1",
+        "UPDATE objects SET api_version = $2, name = $3, kind = $4, updated_at = $5, namespace = $6, annotations = $7, labels = $8, spec = $9 WHERE id = $1",
         item.id, item.api_version, item.name, item.kind, item.updated_at, item.namespace,
         serde_json::to_value(&item.annotations).unwrap(),
         serde_json::to_value(&item.labels).unwrap(),
-        &item.owners, item.spec.0
+        item.spec.0
     )
     .execute(pool)
     .await?;

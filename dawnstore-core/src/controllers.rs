@@ -14,6 +14,7 @@ pub fn get_dawnstore_default_routes(backend: Arc<PostgresBackend>) -> Router {
     Router::new()
         .route("/apply", post(apply))
         .route("/get-objects", post(get_objects))
+        .route("/get-object-infos", post(get_object_infos))
         .route("/get-resource-definitions", post(get_resource_definitions))
         .route("/delete-object", delete(delete_object))
         .with_state(ApiState { backend })
@@ -40,6 +41,20 @@ async fn get_objects(
     Json(query): Json<GetObjectsFilter>,
 ) -> Response {
     match state.backend.get(&query).await {
+        Ok(x) => Json(x).into_response(),
+        Err(y) => {
+            let mut resp = format!("{y:?}").into_response();
+            *resp.status_mut() = StatusCode::BAD_REQUEST;
+            resp
+        }
+    }
+}
+
+async fn get_object_infos(
+    State(state): State<ApiState>,
+    Json(query): Json<GetObjectInfosFilter>,
+) -> Response {
+    match state.backend.get_object_infos(&query).await {
         Ok(x) => Json(x).into_response(),
         Err(y) => {
             let mut resp = format!("{y:?}").into_response();

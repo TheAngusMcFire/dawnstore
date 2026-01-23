@@ -111,7 +111,7 @@ pub struct ObjectInfo {
 
 #[derive(serde::Deserialize, serde::Serialize)]
 pub struct ObjectInfos {
-    infos: Vec<ObjectInfo>,
+    pub infos: Vec<ObjectInfo>,
 }
 
 #[derive(serde::Deserialize, serde::Serialize, Debug)]

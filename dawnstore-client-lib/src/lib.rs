@@ -60,6 +60,23 @@ impl Api {
         }
     }
 
+    pub async fn get_object_infos(
+        &self,
+        filter: &GetObjectInfosFilter,
+    ) -> Result<ObjectInfos, DawnstoreApiError> {
+        let i = self
+            .client
+            .post(format!("{}/get-object-infos", self.base_url))
+            .json(filter)
+            .send()
+            .await?;
+        if i.status().is_success() {
+            Ok(i.json::<ObjectInfos>().await?)
+        } else {
+            Err(DawnstoreApiError::ApiError(i.status(), i.text().await?))
+        }
+    }
+
     pub async fn apply_str(
         &self,
         content: String,

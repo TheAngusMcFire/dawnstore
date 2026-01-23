@@ -387,10 +387,27 @@ impl PostgresBackend {
                 updated_at: x.updated_at,
                 annotations: Some(x.annotations.0),
                 labels: Some(x.labels.0),
-                // todo set the owners
-                owners: Some(Default::default()),
                 spec: x.spec.0,
             })
             .collect())
+    }
+
+    pub async fn get_object_infos(
+        &self,
+        filter: &GetObjectInfosFilter,
+    ) -> Result<ObjectInfos, DawnStoreError> {
+        let mut con = self.pool.acquire().await?;
+        let objs = queries::get_api_object_infos_with_filter(con.as_mut(), filter)
+            .await?
+            .into_iter()
+            .map(|x| dawnstore_lib::ObjectInfo {
+                namespace: x.namespace,
+                id: x.id,
+                api_version: x.api_version,
+                kind: x.kind,
+                name: x.name,
+            })
+            .collect();
+        Ok(ObjectInfos { infos: objs })
     }
 }

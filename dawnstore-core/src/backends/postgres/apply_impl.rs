@@ -249,8 +249,6 @@ pub async fn maintain_objects(
             namespace: obj.namespace.unwrap_or("default".to_string()),
             annotations: sqlx::types::Json(obj.annotations.unwrap_or_default()),
             labels: sqlx::types::Json(obj.labels.unwrap_or_default()),
-            // todo add the owner references
-            owners: Default::default(),
             spec: sqlx::types::Json(obj.spec),
         };
         database_objects.push(new_obj);
