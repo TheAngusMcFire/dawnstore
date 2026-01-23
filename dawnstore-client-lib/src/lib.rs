@@ -26,6 +26,14 @@ impl Api {
         }
     }
 
+    pub fn get_client(&self) -> &reqwest::Client {
+        &self.client
+    }
+
+    pub fn get_base_url(&self) -> &str {
+        &self.base_url
+    }
+
     pub async fn get_resource_definitions(
         &self,
         filter: &GetResourceDefinitionFilter,
