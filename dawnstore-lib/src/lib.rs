@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
 use schemars::JsonSchema;
+use uuid::Uuid;
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, JsonSchema)]
 pub struct ObjectOwner {
@@ -23,8 +24,6 @@ pub struct Object<T> {
     pub annotations: Option<BTreeMap<String, String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub labels: Option<BTreeMap<String, String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub owners: Option<Vec<ObjectOwner>>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub namespace: Option<String>,
@@ -49,8 +48,6 @@ pub struct ReturnObject<T> {
     pub annotations: Option<BTreeMap<String, String>>,
     #[serde(skip_serializing_if = "is_none_or_empty")]
     pub labels: Option<BTreeMap<String, String>>,
-    #[serde(skip_serializing_if = "vec_is_none_or_empty")]
-    pub owners: Option<Vec<ObjectOwner>>,
 
     pub namespace: String,
     pub api_version: String,
@@ -62,9 +59,6 @@ pub struct ReturnObject<T> {
 }
 
 fn is_none_or_empty(v: &Option<BTreeMap<String, String>>) -> bool {
-    v.as_ref().is_none_or(|map| map.is_empty())
-}
-fn vec_is_none_or_empty<T>(v: &Option<Vec<T>>) -> bool {
     v.as_ref().is_none_or(|map| map.is_empty())
 }
 
@@ -79,6 +73,7 @@ pub struct GetObjectsFilter {
     pub page_size: Option<usize>,
 }
 
+#[derive(serde::Deserialize, serde::Serialize, Debug)]
 pub struct ListOfObjects {
     /// should always be list
     pub kind: String,
@@ -104,3 +99,27 @@ pub struct ResourceDefinition {
 
 #[derive(Default, serde::Deserialize, serde::Serialize)]
 pub struct GetResourceDefinitionFilter {}
+
+#[derive(serde::Deserialize, serde::Serialize)]
+pub struct ObjectInfo {
+    pub namespace: String,
+    pub id: Uuid,
+    pub api_version: String,
+    pub kind: String,
+    pub name: String,
+}
+
+#[derive(serde::Deserialize, serde::Serialize)]
+pub struct ObjectInfos {
+    infos: Vec<ObjectInfo>,
+}
+
+#[derive(serde::Deserialize, serde::Serialize, Debug)]
+pub struct GetObjectInfosFilter {
+    pub namespace: Option<String>,
+    pub kind: Option<String>,
+    pub name: Option<String>,
+    pub name_search_string: Option<String>,
+    pub page: Option<usize>,
+    pub page_size: Option<usize>,
+}

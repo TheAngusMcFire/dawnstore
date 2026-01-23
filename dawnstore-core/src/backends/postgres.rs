@@ -131,7 +131,6 @@ impl PostgresBackend {
                     updated_at: x.updated_at,
                     annotations: Some(x.annotations.0),
                     labels: Some(x.labels.0),
-                    owners: None,
                     spec: x.spec.0,
                 })
                 .collect();
@@ -148,7 +147,6 @@ impl PostgresBackend {
                 updated_at: x.updated_at,
                 annotations: Some(x.annotations.0),
                 labels: Some(x.labels.0),
-                owners: None,
                 spec: x.spec.0,
             })
             .collect();
