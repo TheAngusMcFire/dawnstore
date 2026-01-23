@@ -1,11 +1,12 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n            INSERT INTO foreign_key_constraints (id, api_version, kind, key_path, type, behaviour, foreign_key_kind)\n            VALUES ($1, $2, $3, $4, $5, $6, $7)\n            ",
+  "query": "\n        UPDATE foreign_key_constraints \n        SET api_version = $2, kind = $3, key_path = $4, parent_key_path = $5, type = $6, behaviour = $7, foreign_key_kind = $8\n        WHERE id = $1\n        ",
   "describe": {
     "columns": [],
     "parameters": {
       "Left": [
         "Uuid",
+        "Text",
         "Text",
         "Text",
         "Text",
@@ -38,5 +39,5 @@
     },
     "nullable": []
   },
-  "hash": "f464b0d3e85129af638900bf651f9caa7fafaea1b49a2912d1a0ed49d727cc85"
+  "hash": "263cf7835d5b8c631c0e9a555da74cbd3b6ce7077128162bc5fc637ad7241a55"
 }

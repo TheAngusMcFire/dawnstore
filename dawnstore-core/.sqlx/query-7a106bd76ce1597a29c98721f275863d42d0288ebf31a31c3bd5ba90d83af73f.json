@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n         SELECT \n             id, \n             api_version, \n             kind, \n             key_path, \n             type as \"type: ForeignKeyType\", \n             behaviour as \"behaviour: ForeignKeyBehaviour\", \n             foreign_key_kind \n         FROM foreign_key_constraints \n         WHERE api_version = $1 and kind = $2\n         ",
+  "query": "\n         SELECT \n             id, \n             api_version, \n             kind, \n             key_path, \n             parent_key_path, \n             type as \"type: ForeignKeyType\", \n             behaviour as \"behaviour: ForeignKeyBehaviour\", \n             foreign_key_kind \n         FROM foreign_key_constraints \n         WHERE api_version = $1 and kind = $2\n         ",
   "describe": {
     "columns": [
       {
@@ -25,6 +25,11 @@
       },
       {
         "ordinal": 4,
+        "name": "parent_key_path",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
         "name": "type: ForeignKeyType",
         "type_info": {
           "Custom": {
@@ -41,7 +46,7 @@
         }
       },
       {
-        "ordinal": 5,
+        "ordinal": 6,
         "name": "behaviour: ForeignKeyBehaviour",
         "type_info": {
           "Custom": {
@@ -56,7 +61,7 @@
         }
       },
       {
-        "ordinal": 6,
+        "ordinal": 7,
         "name": "foreign_key_kind",
         "type_info": "Text"
       }
@@ -72,10 +77,11 @@
       false,
       false,
       false,
+      true,
       false,
       false,
       true
     ]
   },
-  "hash": "ca34282430b64df8cc300f3ebfea35792bdfe74a49ca515c73cf8c1934cbcd36"
+  "hash": "7a106bd76ce1597a29c98721f275863d42d0288ebf31a31c3bd5ba90d83af73f"
 }
