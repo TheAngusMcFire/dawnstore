@@ -69,6 +69,23 @@ impl Api {
         }
     }
 
+    pub async fn get_objects_typed<T: DeserializeOwned>(
+        &self,
+        filter: &GetObjectsFilter,
+    ) -> Result<Vec<ReturnObject<T>>, DawnstoreApiError> {
+        let i = self
+            .client
+            .post(format!("{}/get-objects", self.base_url))
+            .json(filter)
+            .send()
+            .await?;
+        if i.status().is_success() {
+            Ok(i.json::<Vec<ReturnObject<T>>>().await?)
+        } else {
+            Err(DawnstoreApiError::ApiError(i.status(), i.text().await?))
+        }
+    }
+
     pub async fn get_object_infos(
         &self,
         filter: &GetObjectInfosFilter,
