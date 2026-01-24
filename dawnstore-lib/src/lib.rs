@@ -62,13 +62,14 @@ fn is_none_or_empty(v: &Option<BTreeMap<String, String>>) -> bool {
     v.as_ref().is_none_or(|map| map.is_empty())
 }
 
-#[derive(serde::Deserialize, serde::Serialize, Debug)]
+#[derive(serde::Deserialize, serde::Serialize, Debug, Default)]
 pub struct GetObjectsFilter {
     pub namespace: Option<String>,
     pub kind: Option<String>,
     pub name: Option<String>,
     pub fill_child_foreign_keys: bool,
     pub fill_parent_foreign_keys: bool,
+    pub ids: Option<Vec<Uuid>>,
     pub page: Option<usize>,
     pub page_size: Option<usize>,
 }

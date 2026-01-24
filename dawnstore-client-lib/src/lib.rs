@@ -1,4 +1,4 @@
-use dawnstore_lib::*;
+pub use dawnstore_lib::*;
 use reqwest::{Client, IntoUrl};
 use serde::{Serialize, de::DeserializeOwned};
 

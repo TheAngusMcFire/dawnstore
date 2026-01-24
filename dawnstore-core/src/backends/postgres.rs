@@ -155,6 +155,10 @@ impl PostgresBackend {
             })
             .collect();
 
+        if !filter.fill_child_foreign_keys {
+            return Ok(objects);
+        }
+
         let fk_cache = self.foreign_key_cache.read().await;
         for obj in &mut objects {
             let obj: &mut ReturnAny = obj;

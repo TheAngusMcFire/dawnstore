@@ -340,6 +340,12 @@ pub async fn get_objects_by_filter(pool: &mut PgConnection, filter: &GetObjectsF
         query_builder.push_bind(x);
     }
 
+    if let Some(x) = &filter.ids {
+        query_builder.push(" and id = ANY(");
+        query_builder.push_bind(x);
+        query_builder.push(") ");
+    }
+
     if let Some(x) = &filter.kind {
         query_builder.push(" and kind = ");
         query_builder.push_bind(x);
