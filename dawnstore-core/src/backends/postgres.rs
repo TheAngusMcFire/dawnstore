@@ -179,7 +179,7 @@ impl PostgresBackend {
                 .get_foreign_keys(con.as_mut(), &obj.api_version, &obj.kind)
                 .await?;
 
-            for fkc in &fk_constraints {
+            for fkc in fk_constraints.iter() {
                 let fk_ids = relations
                     .iter()
                     .filter(|x| x.foreign_key_id == fkc.id)

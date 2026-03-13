@@ -9,7 +9,7 @@ use sqlx::{
 };
 
 use crate::models::{ForeignKeyBehaviour, ForeignKeyType};
-#[derive(FromRow, Clone)]
+#[derive(FromRow)]
 pub struct ForeignKeyConstraint {
     pub id: uuid::Uuid,
     pub api_version: String,

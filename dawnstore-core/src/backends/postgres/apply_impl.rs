@@ -74,7 +74,7 @@ pub async fn check_foreign_keys(
     let foreign_keys = cache.get_foreign_keys(pool, api_version, kind).await?;
 
     let mut fk_string_ids: Vec<(Vec<String>, Uuid)> = Default::default();
-    'outer: for key in &foreign_keys {
+    'outer: for key in foreign_keys.iter() {
         let path_segments = key.key_path.split(".");
         let mut key_position = None::<&Value>;
         for seg in path_segments {

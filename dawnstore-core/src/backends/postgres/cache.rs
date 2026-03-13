@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
 use sqlx::{PgConnection, PgPool};
 use tokio::sync::RwLock;
@@ -9,7 +9,7 @@ use super::{data_models::ForeignKeyConstraint, queries};
 
 pub struct CacheStore {
     schema_cache: RwLock<HashMap<String, jsonschema::Validator>>,
-    foreign_key_cache: RwLock<HashMap<String, Vec<ForeignKeyConstraint>>>,
+    foreign_key_cache: RwLock<HashMap<String, Arc<Vec<ForeignKeyConstraint>>>>,
 }
 
 impl Default for CacheStore {
@@ -36,9 +36,13 @@ impl CacheStore {
 
         let all_fks = queries::get_all_foreign_key_constraints(pool).await?;
         let mut fk_cache = self.foreign_key_cache.write().await;
+        let mut grouped: HashMap<String, Vec<ForeignKeyConstraint>> = HashMap::new();
         for fk in all_fks {
             let key = format!("{}/{}", fk.api_version, fk.kind);
-            fk_cache.entry(key).or_default().push(fk);
+            grouped.entry(key).or_default().push(fk);
+        }
+        for (key, vec) in grouped {
+            fk_cache.insert(key, Arc::new(vec));
         }
 
         Ok(())
@@ -58,7 +62,7 @@ impl CacheStore {
         constraints: Vec<ForeignKeyConstraint>,
     ) {
         let key = format!("{api_version}/{kind}");
-        self.foreign_key_cache.write().await.insert(key, constraints);
+        self.foreign_key_cache.write().await.insert(key, Arc::new(constraints));
     }
 
     /// Validate `spec` against the registered JSON schema for `api_version/kind`.
@@ -100,22 +104,22 @@ impl CacheStore {
         pool: &mut PgConnection,
         api_version: &str,
         kind: &str,
-    ) -> Result<Vec<ForeignKeyConstraint>, DawnStoreError> {
+    ) -> Result<Arc<Vec<ForeignKeyConstraint>>, DawnStoreError> {
         let key = format!("{api_version}/{kind}");
 
         {
             let cache = self.foreign_key_cache.read().await;
             if let Some(fks) = cache.get(&key) {
-                return Ok(fks.clone());
+                return Ok(Arc::clone(fks));
             }
         }
 
         // Cache miss: load from DB and cache.
-        let constraints = queries::get_foreign_key_constraints(pool, api_version, kind).await?;
+        let constraints = Arc::new(queries::get_foreign_key_constraints(pool, api_version, kind).await?);
         self.foreign_key_cache
             .write()
             .await
-            .insert(key, constraints.clone());
+            .insert(key, Arc::clone(&constraints));
         Ok(constraints)
     }
 
