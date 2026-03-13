@@ -46,6 +46,7 @@ async fn main() -> color_eyre::Result<()> {
                     Some(resource.clone())
                 },
                 name: None,
+                ids: None,
                 page: None,
                 page_size: None,
                 fill_child_foreign_keys: false,
@@ -78,6 +79,7 @@ async fn main() -> color_eyre::Result<()> {
                 namespace: Some(args.namespace.as_deref().unwrap_or("default").to_string()),
                 kind: Some(resource.clone()),
                 name: Some(item_name.clone()),
+                ids: None,
                 page: None,
                 page_size: None,
                 fill_child_foreign_keys: true,
