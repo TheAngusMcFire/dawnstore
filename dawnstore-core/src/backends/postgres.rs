@@ -2,11 +2,13 @@ use std::collections::{HashMap, HashSet};
 
 use serde_json::Value;
 use sqlx::{PgPool, Pool, Postgres, migrate::MigrateError};
-use tokio::sync::RwLock;
 use uuid::Uuid;
 
 use crate::{
-    backends::postgres::data_models::{ForeignKeyConstraint, ObjectInfo, ObjectSchema, Relation},
+    backends::postgres::{
+        cache::CacheStore,
+        data_models::{ForeignKeyConstraint, ObjectInfo, ObjectSchema, Relation},
+    },
     error::DawnStoreError,
     models::ForeignKey,
 };
@@ -14,13 +16,13 @@ use crate::{
 use dawnstore_lib::*;
 
 mod apply_impl;
+mod cache;
 mod data_models;
 mod queries;
 
 pub struct PostgresBackend {
     pool: Pool<Postgres>,
-    foreign_key_cache: RwLock<HashMap<String, Vec<ForeignKeyConstraint>>>,
-    schema_cache: RwLock<HashMap<String, jsonschema::Validator>>,
+    cache: CacheStore,
 }
 
 impl PostgresBackend {
@@ -39,8 +41,7 @@ impl PostgresBackend {
     pub fn new(pool: Pool<Postgres>) -> Self {
         PostgresBackend {
             pool,
-            foreign_key_cache: Default::default(),
-            schema_cache: Default::default(),
+            cache: CacheStore::default(),
         }
     }
 
@@ -59,14 +60,14 @@ impl PostgresBackend {
             return Ok(());
         }
         let schema = schemars::schema_for!(T);
-        let schema = serde_json::to_string(&schema)?;
+        let schema_str = serde_json::to_string(&schema)?;
         queries::insert_object_schema(
             trans.as_mut(),
             &ObjectSchema {
-                id: Uuid::new_v4(),
+                id: uuid::Uuid::new_v4(),
                 api_version: api_version.clone(),
                 kind: kind.clone(),
-                json_schema: schema,
+                json_schema: schema_str.clone(),
                 aliases: aliases.into_iter().map(|x| x.into()).collect(),
             },
         )
@@ -75,7 +76,7 @@ impl PostgresBackend {
         let mut keys = Vec::<ForeignKeyConstraint>::new();
         for key in foreign_keys {
             keys.push(ForeignKeyConstraint {
-                id: Uuid::new_v4(),
+                id: uuid::Uuid::new_v4(),
                 api_version: api_version.clone(),
                 kind: kind.clone(),
                 key_path: key.path,
@@ -88,6 +89,11 @@ impl PostgresBackend {
         queries::insert_multiple_foreign_key_constraints(trans.as_mut(), keys.as_slice()).await?;
         trans.commit().await?;
 
+        // Update caches so subsequent requests don't need to hit the DB.
+        let validator = jsonschema::validator_for(&serde_json::from_str(&schema_str)?)?;
+        self.cache.insert_schema(&api_version, &kind, validator).await;
+        self.cache.insert_foreign_keys(&api_version, &kind, keys).await;
+
         Ok(())
     }
 
@@ -99,24 +105,7 @@ impl PostgresBackend {
     /// into their respective in-memory caches. Call once at startup so the
     /// first request is never a cache miss.
     pub async fn warm_caches(&self) -> Result<(), DawnStoreError> {
-        let schemas = queries::get_all_object_schemas(&self.pool).await?;
-        let mut schema_cache = self.schema_cache.write().await;
-        for schema in &schemas {
-            let key = format!("{}/{}", schema.api_version, schema.kind);
-            let validator =
-                jsonschema::validator_for(&serde_json::from_str(&schema.json_schema)?)?;
-            schema_cache.insert(key, validator);
-        }
-        drop(schema_cache);
-
-        let all_fks = queries::get_all_foreign_key_constraints(&self.pool).await?;
-        let mut fk_cache = self.foreign_key_cache.write().await;
-        for fk in all_fks {
-            let key = format!("{}/{}", fk.api_version, fk.kind);
-            fk_cache.entry(key).or_default().push(fk);
-        }
-
-        Ok(())
+        self.cache.warm(&self.pool).await
     }
 
     pub async fn delete(&self, delete: &DeleteObject) -> Result<(), DawnStoreError> {
@@ -183,17 +172,14 @@ impl PostgresBackend {
             return Ok(objects);
         }
 
-        let fk_cache = self.foreign_key_cache.read().await;
         for obj in &mut objects {
             let obj: &mut ReturnAny = obj;
-            let type_id = format!("{}/{}", obj.api_version, obj.kind);
-            // let string_id = format!("{}/{}/{}", obj.namespace, obj.kind, obj.name);
-            let Some(x) = fk_cache.get(&type_id) else {
-                return Err(DawnStoreError::InternalServerError(
-                    "foreign key cache entry not found".to_string(),
-                ));
-            };
-            for fkc in x {
+            let fk_constraints = self
+                .cache
+                .get_foreign_keys(con.as_mut(), &obj.api_version, &obj.kind)
+                .await?;
+
+            for fkc in &fk_constraints {
                 let fk_ids = relations
                     .iter()
                     .filter(|x| x.foreign_key_id == fkc.id)
@@ -266,12 +252,10 @@ impl PostgresBackend {
     ) -> Result<Vec<ReturnObject<serde_json::Value>>, DawnStoreError> {
         let input_objects = apply_impl::build_base_objects_from_raw_value(data)?;
 
-        // validate if objects have all required fields and if the underlying schema is sound
         let mut string_ids = Vec::<String>::with_capacity(input_objects.len());
         let mut input_objects_with_string_id = Vec::<(String, ObjectAny)>::new();
         let mut all_fks = HashMap::<String, Vec<(Vec<String>, Uuid)>>::default();
 
-        // let mut schema_cache = self.schema_cache.read().await;
         for obj in input_objects {
             let Some(api_version) = &obj.api_version else {
                 return Err(DawnStoreError::ApiVersionMissingInObject);
@@ -280,29 +264,25 @@ impl PostgresBackend {
                 return Err(DawnStoreError::KindMissingInObject);
             };
             let ns = obj.namespace.as_deref().unwrap_or("default");
-            let object_id = format!("{api_version}/{kind}");
-            let string_id = format!("{}/{}/{}", ns, kind, obj.name,);
+            let string_id = format!("{}/{}/{}", ns, kind, obj.name);
 
             let mut con = self.pool.acquire().await?;
             apply_impl::validate_object_schema(
-                &mut con,
-                &self.schema_cache,
+                con.as_mut(),
+                &self.cache,
                 &obj,
                 api_version,
                 kind,
-                &object_id,
             )
             .await?;
 
-            // check if the foreign keys are valid
             let fks = apply_impl::check_foreign_keys(
-                &mut con,
-                &self.foreign_key_cache,
+                con.as_mut(),
+                &self.cache,
                 &obj,
                 api_version,
                 kind,
                 ns,
-                object_id,
             )
             .await?;
 

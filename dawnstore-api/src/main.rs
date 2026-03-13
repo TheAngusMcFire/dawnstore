@@ -32,6 +32,8 @@ async fn main() -> eyre::Result<()> {
         )
         .await?;
 
+    backend.warm_caches().await?;
+
     let backend = Arc::new(backend);
 
     let dawnstore_routes = dawnstore_core::controllers::get_dawnstore_default_routes(backend);

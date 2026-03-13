@@ -3,17 +3,17 @@ use std::collections::HashMap;
 use chrono::Utc;
 use serde_json::Value;
 use sqlx::PgConnection;
-use tokio::sync::RwLock;
 use uuid::Uuid;
 
 use crate::{
     backends::postgres::{
-        data_models::{ForeignKeyConstraint, Object, ObjectInfo},
+        data_models::{Object, ObjectInfo},
         queries,
     },
     error::DawnStoreError,
     models::ForeignKeyType,
 };
+use super::cache::CacheStore;
 
 use dawnstore_lib::*;
 
@@ -55,69 +55,26 @@ pub fn build_base_objects_from_raw_value(
 
 pub async fn validate_object_schema(
     pool: &mut PgConnection,
-    sc: &RwLock<HashMap<String, jsonschema::Validator>>,
+    cache: &CacheStore,
     obj: &dawnstore_lib::Object<Value>,
     api_version: &str,
     kind: &str,
-    object_id: &String,
 ) -> Result<(), DawnStoreError> {
-    let mut schema_cache = sc.read().await;
-    let validator = match schema_cache.get(object_id) {
-        Some(x) => x,
-        None => {
-            drop(schema_cache);
-            let Some(schema) = queries::get_object_schema(pool, api_version, kind).await? else {
-                return Err(DawnStoreError::NoSchemaForObjectFound {
-                    api_version: api_version.to_owned(),
-                    kind: kind.to_owned(),
-                });
-            };
-            let validator = jsonschema::validator_for(&serde_json::from_str(&schema.json_schema)?)?;
-            sc.write().await.insert(object_id.clone(), validator);
-            schema_cache = sc.read().await;
-            schema_cache
-                .get(object_id)
-                .expect("we just added this thing")
-        }
-    };
-
-    if let Err(e) = validator.validate(&obj.spec) {
-        return Err(DawnStoreError::ObjectValidationError {
-            api_version: api_version.to_owned(),
-            kind: kind.to_owned(),
-            name: obj.name.clone(),
-            validation_error: e.to_owned(),
-        });
-    };
-
-    Ok(())
+    cache.validate_schema(pool, api_version, kind, &obj.name, &obj.spec).await
 }
 
 pub async fn check_foreign_keys(
     pool: &mut PgConnection,
-    fkc: &RwLock<HashMap<String, Vec<ForeignKeyConstraint>>>,
+    cache: &CacheStore,
     obj: &dawnstore_lib::Object<Value>,
     api_version: &str,
     kind: &str,
     ns: &str,
-    type_id: String,
 ) -> Result<Vec<(Vec<String>, Uuid)>, DawnStoreError> {
-    let mut foreign_key_cache = fkc.read().await;
-    let foreign_keys = match foreign_key_cache.get(&type_id) {
-        Some(x) => x,
-        None => {
-            drop(foreign_key_cache);
-            let costraints = queries::get_foreign_key_constraints(pool, api_version, kind).await?;
-            fkc.write().await.insert(type_id.clone(), costraints);
-            foreign_key_cache = fkc.read().await;
-            foreign_key_cache
-                .get(&type_id)
-                .expect("we just added the constraints")
-        }
-    };
+    let foreign_keys = cache.get_foreign_keys(pool, api_version, kind).await?;
 
     let mut fk_string_ids: Vec<(Vec<String>, Uuid)> = Default::default();
-    'outer: for key in foreign_keys {
+    'outer: for key in &foreign_keys {
         let path_segments = key.key_path.split(".");
         let mut key_position = None::<&Value>;
         for seg in path_segments {
