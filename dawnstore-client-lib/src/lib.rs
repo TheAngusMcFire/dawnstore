@@ -1,5 +1,5 @@
 pub use dawnstore_lib::*;
-use reqwest::{Client, IntoUrl};
+use reqwest::Client;
 use serde::{Serialize, de::DeserializeOwned};
 
 #[derive(thiserror::Error, Debug)]
