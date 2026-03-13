@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT \n            id, \n            api_version, \n            kind, \n            aliases,\n            json_schema \n        FROM object_schemas\n        ",
+  "query": "\n        SELECT\n            id,\n            api_version,\n            kind,\n            aliases,\n            json_schema\n        FROM object_schemas\n        ",
   "describe": {
     "columns": [
       {
@@ -40,5 +40,5 @@
       false
     ]
   },
-  "hash": "370d067f15f087c47ea66e4e75e0d212fc76724e100258ebb4d8f2e17d928ddb"
+  "hash": "58d26e15aa0c10e461ff442852f88f4f45d2fd6716ab9492af1a00cb06ff4faf"
 }

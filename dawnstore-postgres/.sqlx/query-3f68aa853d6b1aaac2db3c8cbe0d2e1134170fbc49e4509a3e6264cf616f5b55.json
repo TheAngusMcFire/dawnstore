@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT object_id, foreign_object_id, foreign_key_id \n        FROM relations \n        WHERE object_id = $1 AND foreign_object_id = $2 AND foreign_key_id = $3\n        ",
+  "query": "\n        SELECT object_id, foreign_object_id, foreign_key_id\n        FROM relations\n        WHERE object_id = ANY($1)\n        ",
   "describe": {
     "columns": [
       {
@@ -21,9 +21,7 @@
     ],
     "parameters": {
       "Left": [
-        "Uuid",
-        "Uuid",
-        "Uuid"
+        "UuidArray"
       ]
     },
     "nullable": [
@@ -32,5 +30,5 @@
       false
     ]
   },
-  "hash": "fe72787ddce2629bc5514da79a4a0378d5a507e575db183ce5847f9fde0b1512"
+  "hash": "3f68aa853d6b1aaac2db3c8cbe0d2e1134170fbc49e4509a3e6264cf616f5b55"
 }

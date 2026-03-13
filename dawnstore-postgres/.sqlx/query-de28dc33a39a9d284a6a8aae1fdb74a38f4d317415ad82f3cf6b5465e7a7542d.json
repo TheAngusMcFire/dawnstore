@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n         SELECT \n             id, \n             api_version, \n             kind, \n             key_path, \n             parent_key_path, \n             type as \"type: ForeignKeyType\", \n             behaviour as \"behaviour: ForeignKeyBehaviour\", \n             foreign_key_kind \n         FROM foreign_key_constraints \n         WHERE api_version = $1 and kind = $2\n         ",
+  "query": "\n        SELECT\n            id,\n            api_version,\n            kind,\n            key_path,\n            parent_key_path,\n            type as \"type: ForeignKeyType\",\n            behaviour as \"behaviour: ForeignKeyBehaviour\",\n            foreign_key_kind\n        FROM foreign_key_constraints\n        WHERE api_version = $1 and kind = $2\n        ",
   "describe": {
     "columns": [
       {
@@ -83,5 +83,5 @@
       true
     ]
   },
-  "hash": "7a106bd76ce1597a29c98721f275863d42d0288ebf31a31c3bd5ba90d83af73f"
+  "hash": "de28dc33a39a9d284a6a8aae1fdb74a38f4d317415ad82f3cf6b5465e7a7542d"
 }
