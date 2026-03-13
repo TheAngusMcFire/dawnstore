@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use crate::backend::PostgresBackend;
 use axum::{
     Json, Router,
     extract::State,
@@ -10,22 +9,40 @@ use axum::{
 };
 use dawnstore_lib::*;
 
-pub fn get_dawnstore_default_routes(backend: Arc<PostgresBackend>) -> Router {
+use crate::backend::DawnstoreBackend;
+
+pub fn get_dawnstore_default_routes<B>(backend: Arc<B>) -> Router
+where
+    B: DawnstoreBackend + 'static,
+{
     Router::new()
-        .route("/apply", post(apply))
-        .route("/get-objects", post(get_objects))
-        .route("/get-object-infos", post(get_object_infos))
-        .route("/get-resource-definitions", post(get_resource_definitions))
-        .route("/delete-object", delete(delete_object))
+        .route("/apply", post(apply::<B>))
+        .route("/get-objects", post(get_objects::<B>))
+        .route("/get-object-infos", post(get_object_infos::<B>))
+        .route("/get-resource-definitions", post(get_resource_definitions::<B>))
+        .route("/delete-object", delete(delete_object::<B>))
         .with_state(ApiState { backend })
 }
 
-#[derive(Clone)]
-struct ApiState {
-    backend: Arc<PostgresBackend>,
+struct ApiState<B> {
+    backend: Arc<B>,
 }
 
-async fn apply(State(state): State<ApiState>, Json(obj): Json<serde_json::Value>) -> Response {
+// Manual Clone so the impl doesn't gain a spurious `B: Clone` bound.
+// Arc<B> is always Clone regardless of B.
+impl<B> Clone for ApiState<B> {
+    fn clone(&self) -> Self {
+        Self { backend: Arc::clone(&self.backend) }
+    }
+}
+
+async fn apply<B>(
+    State(state): State<ApiState<B>>,
+    Json(obj): Json<serde_json::Value>,
+) -> Response
+where
+    B: DawnstoreBackend + 'static,
+{
     match state.backend.apply_raw(obj).await {
         Ok(x) => Json(x).into_response(),
         Err(y) => {
@@ -36,10 +53,13 @@ async fn apply(State(state): State<ApiState>, Json(obj): Json<serde_json::Value>
     }
 }
 
-async fn get_objects(
-    State(state): State<ApiState>,
+async fn get_objects<B>(
+    State(state): State<ApiState<B>>,
     Json(query): Json<GetObjectsFilter>,
-) -> Response {
+) -> Response
+where
+    B: DawnstoreBackend + 'static,
+{
     match state.backend.get(&query).await {
         Ok(x) => Json(x).into_response(),
         Err(y) => {
@@ -50,10 +70,13 @@ async fn get_objects(
     }
 }
 
-async fn get_object_infos(
-    State(state): State<ApiState>,
+async fn get_object_infos<B>(
+    State(state): State<ApiState<B>>,
     Json(query): Json<GetObjectInfosFilter>,
-) -> Response {
+) -> Response
+where
+    B: DawnstoreBackend + 'static,
+{
     match state.backend.get_object_infos(&query).await {
         Ok(x) => Json(x).into_response(),
         Err(y) => {
@@ -64,10 +87,13 @@ async fn get_object_infos(
     }
 }
 
-async fn get_resource_definitions(
-    State(state): State<ApiState>,
+async fn get_resource_definitions<B>(
+    State(state): State<ApiState<B>>,
     Json(query): Json<GetResourceDefinitionFilter>,
-) -> Response {
+) -> Response
+where
+    B: DawnstoreBackend + 'static,
+{
     match state.backend.get_resource_definition(&query).await {
         Ok(x) => Json(x).into_response(),
         Err(y) => {
@@ -78,7 +104,13 @@ async fn get_resource_definitions(
     }
 }
 
-async fn delete_object(State(state): State<ApiState>, Json(query): Json<DeleteObject>) -> Response {
+async fn delete_object<B>(
+    State(state): State<ApiState<B>>,
+    Json(query): Json<DeleteObject>,
+) -> Response
+where
+    B: DawnstoreBackend + 'static,
+{
     match state.backend.delete(&query).await {
         Ok(x) => Json(x).into_response(),
         Err(y) => {

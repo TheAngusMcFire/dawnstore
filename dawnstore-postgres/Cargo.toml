@@ -13,6 +13,5 @@ tracing.workspace = true
 schemars.workspace = true
 jsonschema.workspace = true
 sqlx.workspace = true
-axum.workspace = true
 dawnstore-core = { path = "../dawnstore-core" }
 dawnstore-lib = { path = "../dawnstore-lib" }

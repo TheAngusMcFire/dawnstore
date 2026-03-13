@@ -3,7 +3,8 @@ use std::sync::Arc;
 use axum::Router;
 use color_eyre::eyre;
 use dawnstore_core::models::{Container, ForeignKey, ForeignKeyType};
-use dawnstore_postgres::{PostgresBackend, controllers::get_dawnstore_default_routes};
+use dawnstore_core::controllers::get_dawnstore_default_routes;
+use dawnstore_postgres::PostgresBackend;
 use tokio::net::TcpListener;
 
 #[tokio::main]

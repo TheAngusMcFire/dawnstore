@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 use cache::CacheStore;
 use data_models::{ForeignKeyConstraint, ObjectInfo, ObjectSchema, Relation};
-use dawnstore_core::{error::DawnStoreError, models::ForeignKey};
+use dawnstore_core::{backend::DawnstoreBackend, error::DawnStoreError, models::ForeignKey};
 use dawnstore_lib::*;
 
 mod apply_impl;
@@ -19,6 +19,8 @@ pub struct PostgresBackend {
     cache: CacheStore,
 }
 
+// ── Postgres-specific methods ─────────────────────────────────────────────────
+
 impl PostgresBackend {
     pub fn get_pool(&self) -> &Pool<Postgres> {
         &self.pool
@@ -27,8 +29,7 @@ impl PostgresBackend {
     pub async fn new_from_connection_string(
         connection_string: impl Into<String>,
     ) -> Result<Self, DawnStoreError> {
-        let connection_string = connection_string.into();
-        let pool = PgPool::connect(&connection_string).await?;
+        let pool = PgPool::connect(&connection_string.into()).await?;
         Ok(Self::new(pool))
     }
 
@@ -66,7 +67,6 @@ impl PostgresBackend {
             },
         )
         .await?;
-        let foreign_keys = foreign_keys.into_iter();
         let mut keys = Vec::<ForeignKeyConstraint>::new();
         for key in foreign_keys {
             keys.push(ForeignKeyConstraint {
@@ -83,7 +83,6 @@ impl PostgresBackend {
         queries::insert_multiple_foreign_key_constraints(trans.as_mut(), keys.as_slice()).await?;
         trans.commit().await?;
 
-        // Update caches so subsequent requests don't need to hit the DB.
         let validator = jsonschema::validator_for(&serde_json::from_str(&schema_str)?)?;
         self.cache.insert_schema(&api_version, &kind, validator).await;
         self.cache.insert_foreign_keys(&api_version, &kind, keys).await;
@@ -95,14 +94,15 @@ impl PostgresBackend {
         sqlx::migrate!("./migrations").run(&self.pool).await
     }
 
-    /// Loads all object schemas and foreign key constraints from the database
-    /// into their respective in-memory caches. Call once at startup so the
-    /// first request is never a cache miss.
     pub async fn warm_caches(&self) -> Result<(), DawnStoreError> {
         self.cache.warm(&self.pool).await
     }
+}
 
-    pub async fn delete(&self, delete: &DeleteObject) -> Result<(), DawnStoreError> {
+// ── DawnstoreBackend trait impl ───────────────────────────────────────────────
+
+impl DawnstoreBackend for PostgresBackend {
+    async fn delete(&self, delete: &DeleteObject) -> Result<(), DawnStoreError> {
         let mut con = self.pool.acquire().await?;
         let ns = match &delete.namespace {
             Some(x) if x == "default" => None,
@@ -114,7 +114,7 @@ impl PostgresBackend {
         Ok(())
     }
 
-    pub async fn get(
+    async fn get(
         &self,
         filter: &GetObjectsFilter,
     ) -> Result<Vec<ReturnObject<serde_json::Value>>, DawnStoreError> {
@@ -123,13 +123,10 @@ impl PostgresBackend {
 
         let obj_ids = objs.iter().map(|x| x.id).collect::<Vec<_>>();
         let relations = queries::get_relations_of_objects(con.as_mut(), obj_ids.as_slice()).await?;
-        let foreign_objects = relations
-            .iter()
-            .map(|x| x.foreign_object_id)
-            .collect::<Vec<_>>();
+        let foreign_object_ids = relations.iter().map(|x| x.foreign_object_id).collect::<Vec<_>>();
 
         let foreign_objects: Vec<ReturnAny> =
-            queries::get_objects(con.as_mut(), foreign_objects.as_slice())
+            queries::get_objects(con.as_mut(), foreign_object_ids.as_slice())
                 .await?
                 .into_iter()
                 .map(|x| ReturnAny {
@@ -146,7 +143,7 @@ impl PostgresBackend {
                 })
                 .collect();
 
-        let mut objects = objs
+        let mut objects: Vec<ReturnAny> = objs
             .into_iter()
             .map(|x| ReturnAny {
                 id: x.id,
@@ -167,7 +164,6 @@ impl PostgresBackend {
         }
 
         for obj in &mut objects {
-            let obj: &mut ReturnAny = obj;
             let fk_constraints = self
                 .cache
                 .get_foreign_keys(con.as_mut(), &obj.api_version, &obj.kind)
@@ -189,9 +185,7 @@ impl PostgresBackend {
                 let last_segment = path_segments.pop();
                 let mut key_position = &mut obj.spec;
                 for seg in path_segments {
-                    let k = key_position.get(seg).is_none();
-
-                    if k {
+                    if key_position.get(seg).is_none() {
                         if let Value::Object(x) = key_position {
                             x.insert(seg.to_string(), Value::Object(Default::default()));
                         } else {
@@ -199,25 +193,16 @@ impl PostgresBackend {
                                 "unexpected json value of field".to_string(),
                             ));
                         }
-                    };
-
-                    key_position = key_position.get_mut(seg).unwrap()
+                    }
+                    key_position = key_position.get_mut(seg).unwrap();
                 }
 
                 if let (Some(seg), Value::Object(x)) = (last_segment, key_position) {
+                    use dawnstore_core::models::ForeignKeyType::*;
                     let value = match fkc.r#type {
-                        dawnstore_core::models::ForeignKeyType::One => {
-                            serde_json::to_value(objs.pop())?
-                        }
-                        dawnstore_core::models::ForeignKeyType::OneOptional => {
-                            serde_json::to_value(objs.pop())?
-                        }
-                        dawnstore_core::models::ForeignKeyType::OneOrMany => {
-                            serde_json::to_value(objs)?
-                        }
-                        dawnstore_core::models::ForeignKeyType::NoneOrMany => {
-                            serde_json::to_value(objs.pop())?
-                        }
+                        One | OneOptional => serde_json::to_value(objs.pop())?,
+                        OneOrMany => serde_json::to_value(objs)?,
+                        NoneOrMany => serde_json::to_value(objs.pop())?,
                     };
                     x.insert(seg.to_string(), value);
                 }
@@ -227,7 +212,7 @@ impl PostgresBackend {
         Ok(objects)
     }
 
-    pub async fn get_resource_definition(
+    async fn get_resource_definition(
         &self,
         _filter: &GetResourceDefinitionFilter,
     ) -> Result<Vec<ResourceDefinition>, DawnStoreError> {
@@ -244,7 +229,7 @@ impl PostgresBackend {
         Ok(objs)
     }
 
-    pub async fn apply_raw(
+    async fn apply_raw(
         &self,
         data: serde_json::Value,
     ) -> Result<Vec<ReturnObject<serde_json::Value>>, DawnStoreError> {
@@ -284,20 +269,13 @@ impl PostgresBackend {
         }
 
         let mut all_string_ids = HashSet::<&str>::new();
-        string_ids.iter().for_each(|x| {
-            all_string_ids.insert(x.as_str());
-        });
+        string_ids.iter().for_each(|x| { all_string_ids.insert(x.as_str()); });
         all_fks.values().for_each(|x| {
             x.iter().for_each(|(ids, _)| {
-                ids.iter().for_each(|x| {
-                    all_string_ids.insert(x.as_str());
-                });
+                ids.iter().for_each(|x| { all_string_ids.insert(x.as_str()); });
             });
         });
-        let all_string_ids = all_string_ids
-            .into_iter()
-            .map(|x| x.to_owned())
-            .collect::<Vec<String>>();
+        let all_string_ids = all_string_ids.into_iter().map(|x| x.to_owned()).collect::<Vec<_>>();
 
         let mut con = self.pool.begin().await?;
         let mut object_infos = queries::get_object_infos(con.as_mut(), all_string_ids.as_slice())
@@ -314,14 +292,7 @@ impl PostgresBackend {
                 .await?;
         database_objects.iter().for_each(|x| {
             let string_id = format!("{}/{}/{}", x.namespace, x.kind, x.name);
-            object_infos.insert(
-                string_id.clone(),
-                ObjectInfo {
-                    id: x.id,
-                    string_id,
-                    created_at: x.created_at,
-                },
-            );
+            object_infos.insert(string_id.clone(), ObjectInfo { id: x.id, string_id, created_at: x.created_at });
         });
 
         let mut foreign_key_objects = Vec::<Relation>::new();
@@ -356,24 +327,12 @@ impl PostgresBackend {
                 })
             })
             .collect::<Vec<_>>();
-        let object_ids_to_delete = relations_to_delete
-            .iter()
-            .map(|x| x.object_id)
-            .collect::<Vec<_>>();
-        let fk_ids_to_delete = relations_to_delete
-            .iter()
-            .map(|x| x.foreign_key_id)
-            .collect::<Vec<_>>();
-        let fko_ids_to_delete = relations_to_delete
-            .iter()
-            .map(|x| x.foreign_object_id)
-            .collect::<Vec<_>>();
 
         queries::delete_multiple_relations(
             con.as_mut(),
-            object_ids_to_delete.as_slice(),
-            fko_ids_to_delete.as_slice(),
-            fk_ids_to_delete.as_slice(),
+            relations_to_delete.iter().map(|x| x.object_id).collect::<Vec<_>>().as_slice(),
+            relations_to_delete.iter().map(|x| x.foreign_object_id).collect::<Vec<_>>().as_slice(),
+            relations_to_delete.iter().map(|x| x.foreign_key_id).collect::<Vec<_>>().as_slice(),
         )
         .await?;
         queries::insert_multiple_relation(con.as_mut(), foreign_key_objects.as_slice()).await?;
@@ -396,7 +355,7 @@ impl PostgresBackend {
             .collect())
     }
 
-    pub async fn get_object_infos(
+    async fn get_object_infos(
         &self,
         filter: &GetObjectInfosFilter,
     ) -> Result<ObjectInfos, DawnStoreError> {
