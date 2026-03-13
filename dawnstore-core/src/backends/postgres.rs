@@ -95,6 +95,30 @@ impl PostgresBackend {
         sqlx::migrate!("./migrations").run(&self.pool).await
     }
 
+    /// Loads all object schemas and foreign key constraints from the database
+    /// into their respective in-memory caches. Call once at startup so the
+    /// first request is never a cache miss.
+    pub async fn warm_caches(&self) -> Result<(), DawnStoreError> {
+        let schemas = queries::get_all_object_schemas(&self.pool).await?;
+        let mut schema_cache = self.schema_cache.write().await;
+        for schema in &schemas {
+            let key = format!("{}/{}", schema.api_version, schema.kind);
+            let validator =
+                jsonschema::validator_for(&serde_json::from_str(&schema.json_schema)?)?;
+            schema_cache.insert(key, validator);
+        }
+        drop(schema_cache);
+
+        let all_fks = queries::get_all_foreign_key_constraints(&self.pool).await?;
+        let mut fk_cache = self.foreign_key_cache.write().await;
+        for fk in all_fks {
+            let key = format!("{}/{}", fk.api_version, fk.kind);
+            fk_cache.entry(key).or_default().push(fk);
+        }
+
+        Ok(())
+    }
+
     pub async fn delete(&self, delete: &DeleteObject) -> Result<(), DawnStoreError> {
         let mut con = self.pool.acquire().await?;
         let ns = match &delete.namespace {

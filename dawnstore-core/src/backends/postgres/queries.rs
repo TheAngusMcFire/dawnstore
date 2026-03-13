@@ -33,6 +33,26 @@ use crate::models::{ForeignKeyType, ForeignKeyBehaviour};
      .await
  }
 
+pub async fn get_all_foreign_key_constraints(pool: &PgPool) -> Result<Vec<ForeignKeyConstraint>> {
+    sqlx::query_as!(
+        ForeignKeyConstraint,
+        r#"
+        SELECT
+            id,
+            api_version,
+            kind,
+            key_path,
+            parent_key_path,
+            type as "type: ForeignKeyType",
+            behaviour as "behaviour: ForeignKeyBehaviour",
+            foreign_key_kind
+        FROM foreign_key_constraints
+        "#
+    )
+    .fetch_all(pool)
+    .await
+}
+
 /// Inserts a single record
 pub async fn insert_foreign_key_constraints(
     pool: &PgPool, 
