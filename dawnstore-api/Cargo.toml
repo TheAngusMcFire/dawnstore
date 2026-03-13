@@ -10,7 +10,7 @@ axum.workspace = true
 tracing.workspace = true
 tracing-subscriber = { version = "0" }
 tokio.workspace = true
-sqlx.workspace = true
 color-eyre = "0.6.5"
-dawnstore-core = { path = "../dawnstore-core" , features = ["postgres", "axum"]}
+dawnstore-postgres = { path = "../dawnstore-postgres" }
+dawnstore-core = { path = "../dawnstore-core" }
 dawnstore-lib = { path = "../dawnstore-lib" }

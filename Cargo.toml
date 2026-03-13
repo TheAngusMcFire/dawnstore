@@ -2,7 +2,7 @@
 
 resolver = "2"
 
-members = ["dawnstore-api", "dawnstore-cli", "dawnstore-client-lib", "dawnstore-core", "dawnstore-lib", "dawnstore-testing"]
+members = ["dawnstore-api", "dawnstore-cli", "dawnstore-client-lib", "dawnstore-core", "dawnstore-lib", "dawnstore-postgres", "dawnstore-testing"]
 
 [workspace.dependencies]
 thiserror = { version = "2.0.17" }

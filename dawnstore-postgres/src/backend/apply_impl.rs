@@ -5,17 +5,14 @@ use serde_json::Value;
 use sqlx::PgConnection;
 use uuid::Uuid;
 
-use crate::{
-    backends::postgres::{
-        data_models::{Object, ObjectInfo},
-        queries,
-    },
-    error::DawnStoreError,
-    models::ForeignKeyType,
-};
-use super::cache::CacheStore;
-
+use dawnstore_core::{error::DawnStoreError, models::ForeignKeyType};
 use dawnstore_lib::*;
+
+use super::{
+    cache::CacheStore,
+    data_models::{Object, ObjectInfo},
+    queries,
+};
 
 pub fn build_base_objects_from_raw_value(
     mut data: Value,
@@ -145,9 +142,7 @@ pub async fn check_foreign_keys(
             let comps = fk_val.split("/").collect::<Vec<_>>();
             let (ns, fk_kind, fk_name) = match comps.as_slice() {
                 [ns, kind, name] => (*ns, *kind, *name),
-                // assume same ns as the current object
                 [kind, name] => (ns, *kind, *name),
-                // assume same ns and kind as the current object
                 [name] => (ns, kind, *name),
                 _ => {
                     return Err(DawnStoreError::ObjectValidationWrongForeignKeyEntryFormat {

@@ -3,7 +3,7 @@ use std::{collections::HashMap, sync::Arc};
 use sqlx::{PgConnection, PgPool};
 use tokio::sync::RwLock;
 
-use crate::error::DawnStoreError;
+use dawnstore_core::error::DawnStoreError;
 
 use super::{data_models::ForeignKeyConstraint, queries};
 

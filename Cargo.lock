@@ -536,9 +536,9 @@ dependencies = [
  "color-eyre",
  "dawnstore-core",
  "dawnstore-lib",
+ "dawnstore-postgres",
  "serde",
  "serde_json",
- "sqlx",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -574,8 +574,6 @@ dependencies = [
 name = "dawnstore-core"
 version = "0.1.0"
 dependencies = [
- "axum",
- "chrono",
  "dawnstore-lib",
  "jsonschema",
  "schemars",
@@ -583,10 +581,6 @@ dependencies = [
  "serde_json",
  "sqlx",
  "thiserror 2.0.17",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "uuid",
 ]
 
 [[package]]
@@ -601,6 +595,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "dawnstore-postgres"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "chrono",
+ "dawnstore-core",
+ "dawnstore-lib",
+ "jsonschema",
+ "schemars",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "dawnstore-testing"
 version = "0.1.0"
 dependencies = [
@@ -608,6 +620,7 @@ dependencies = [
  "dawnstore-client-lib",
  "dawnstore-core",
  "dawnstore-lib",
+ "dawnstore-postgres",
  "serde_json",
  "sqlx",
  "tokio",

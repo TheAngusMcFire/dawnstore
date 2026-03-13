@@ -4,7 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dev-dependencies]
-dawnstore-core = { path = "../dawnstore-core", features = ["postgres", "axum"] }
+dawnstore-postgres = { path = "../dawnstore-postgres" }
+dawnstore-core = { path = "../dawnstore-core" }
 dawnstore-client-lib = { path = "../dawnstore-client-lib" }
 dawnstore-lib = { path = "../dawnstore-lib" }
 axum = { workspace = true }

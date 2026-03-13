@@ -4,15 +4,9 @@ use serde_json::Value;
 use sqlx::{PgPool, Pool, Postgres, migrate::MigrateError};
 use uuid::Uuid;
 
-use crate::{
-    backends::postgres::{
-        cache::CacheStore,
-        data_models::{ForeignKeyConstraint, ObjectInfo, ObjectSchema, Relation},
-    },
-    error::DawnStoreError,
-    models::ForeignKey,
-};
-
+use cache::CacheStore;
+use data_models::{ForeignKeyConstraint, ObjectInfo, ObjectSchema, Relation};
+use dawnstore_core::{error::DawnStoreError, models::ForeignKey};
 use dawnstore_lib::*;
 
 mod apply_impl;
@@ -212,12 +206,16 @@ impl PostgresBackend {
 
                 if let (Some(seg), Value::Object(x)) = (last_segment, key_position) {
                     let value = match fkc.r#type {
-                        crate::models::ForeignKeyType::One => serde_json::to_value(objs.pop())?,
-                        crate::models::ForeignKeyType::OneOptional => {
+                        dawnstore_core::models::ForeignKeyType::One => {
                             serde_json::to_value(objs.pop())?
                         }
-                        crate::models::ForeignKeyType::OneOrMany => serde_json::to_value(objs)?,
-                        crate::models::ForeignKeyType::NoneOrMany => {
+                        dawnstore_core::models::ForeignKeyType::OneOptional => {
+                            serde_json::to_value(objs.pop())?
+                        }
+                        dawnstore_core::models::ForeignKeyType::OneOrMany => {
+                            serde_json::to_value(objs)?
+                        }
+                        dawnstore_core::models::ForeignKeyType::NoneOrMany => {
                             serde_json::to_value(objs.pop())?
                         }
                     };
@@ -267,14 +265,8 @@ impl PostgresBackend {
             let string_id = format!("{}/{}/{}", ns, kind, obj.name);
 
             let mut con = self.pool.acquire().await?;
-            apply_impl::validate_object_schema(
-                con.as_mut(),
-                &self.cache,
-                &obj,
-                api_version,
-                kind,
-            )
-            .await?;
+            apply_impl::validate_object_schema(con.as_mut(), &self.cache, &obj, api_version, kind)
+                .await?;
 
             let fks = apply_impl::check_foreign_keys(
                 con.as_mut(),

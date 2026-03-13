@@ -10,17 +10,14 @@ use std::sync::Arc;
 
 use axum::Router;
 use dawnstore_client_lib::Api;
-use dawnstore_core::{
-    backends::postgres::PostgresBackend,
-    controllers::get_dawnstore_default_routes,
-    models::{Container, ForeignKey, ForeignKeyType},
-};
+use dawnstore_core::models::{Container, ForeignKey, ForeignKeyType};
+use dawnstore_postgres::{PostgresBackend, controllers::get_dawnstore_default_routes};
 use dawnstore_lib::{DeleteObject, GetObjectsFilter};
 use sqlx::PgPool;
 use tokio::net::TcpListener;
 
 static MIGRATOR: sqlx::migrate::Migrator =
-    sqlx::migrate!("../dawnstore-core/migrations");
+    sqlx::migrate!("../dawnstore-postgres/migrations");
 
 /// Starts a test server backed by `pool`, seeds the `container` schema,
 /// and returns a client pointed at it. The server runs until the test ends.

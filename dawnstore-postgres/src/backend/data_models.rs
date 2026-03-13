@@ -8,7 +8,8 @@ use sqlx::{
     },
 };
 
-use crate::models::{ForeignKeyBehaviour, ForeignKeyType};
+use dawnstore_core::models::{ForeignKeyBehaviour, ForeignKeyType};
+
 #[derive(FromRow)]
 pub struct ForeignKeyConstraint {
     pub id: uuid::Uuid,

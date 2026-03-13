@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        DELETE FROM relations \n        WHERE object_id = $1 AND foreign_object_id = $2 AND foreign_key_id = $3\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "3957fcdac00ad5feeb17ac5e4a4794e34ca4fd890c883e37123614c9e41b0cfb"
+}

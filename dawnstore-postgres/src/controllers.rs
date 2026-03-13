@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::backends::postgres::PostgresBackend;
+use crate::backend::PostgresBackend;
 use axum::{
     Json, Router,
     extract::State,
