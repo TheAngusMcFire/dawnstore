@@ -1,170 +1,24 @@
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-    use std::future::Future;
-
-    use chrono::Utc;
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
     use uuid::Uuid;
+    use chrono::Utc;
 
-    use crate::abstractions::{
-        BackendGetObjectsFilter, ForeignKeyBehaviour, ForeignKeyType, NewDawnStoreBackend,
-        ObjectRelation, RawForeignKeyConstraint, RawSchema,
-    };
-    use crate::rbac::helpers::object_string_id;
-    use crate::cache::DawnstoreCache;
+    use crate::abstractions::ForeignKeyType;
     use crate::error::DawnStoreError;
     use crate::handlers::apply::apply;
-    use crate::rbac::cache::{EffectivePermissions, GrantedScope, Verb};
-    use crate::rbac::middleware::Claims;
-    use dawnstore_lib::{ObjectAny, ReturnObject};
+    use crate::handlers::test_common::{
+        MockBackend, init_cache, kind_grant, make_claims, make_fk, permissive_schema,
+        wildcard_grant, make_return_object,
+    };
+    use crate::rbac::cache::{EffectivePermissions, Verb};
+    use dawnstore_lib::ReturnObject;
 
-    // ── MockBackend ───────────────────────────────────────────────────────────
-
-    struct MockBackend {
-        schemas: Vec<RawSchema>,
-        fk_constraints: Vec<RawForeignKeyConstraint>,
-        /// Stored as serialised `ReturnObject<Value>`, keyed by `namespace/kind/name`.
-        objects: std::sync::Mutex<HashMap<String, Value>>,
-    }
-
-    impl MockBackend {
-        fn new() -> Self {
-            Self {
-                schemas: vec![],
-                fk_constraints: vec![],
-                objects: std::sync::Mutex::new(HashMap::new()),
-            }
-        }
-
-        fn with_schema(mut self, schema: RawSchema) -> Self {
-            self.schemas.push(schema);
-            self
-        }
-
-        fn with_fk(mut self, fk: RawForeignKeyConstraint) -> Self {
-            self.fk_constraints.push(fk);
-            self
-        }
-
-        fn with_object(self, obj: ReturnObject<Value>) -> Self {
-            let key = object_string_id(&obj.namespace, &obj.kind, &obj.name);
-            let value = serde_json::to_value(&obj).unwrap();
-            self.objects.lock().unwrap().insert(key, value);
-            self
-        }
-    }
-
-    impl NewDawnStoreBackend for MockBackend {
-        fn load_all_schemas(
-            &self,
-        ) -> impl Future<Output = Result<Vec<RawSchema>, DawnStoreError>> + Send {
-            let schemas = self.schemas.clone();
-            async move { Ok(schemas) }
-        }
-
-        fn load_all_foreign_key_constraints(
-            &self,
-        ) -> impl Future<Output = Result<Vec<RawForeignKeyConstraint>, DawnStoreError>> + Send
-        {
-            let fks = self.fk_constraints.clone();
-            async move { Ok(fks) }
-        }
-
-        fn get_objects(
-            &self,
-            _filter: &BackendGetObjectsFilter,
-        ) -> impl Future<Output = Result<Vec<ReturnObject<Value>>, DawnStoreError>> + Send
-        {
-            // Return empty — permissions are injected directly via cache.insert_permissions().
-            async move { Ok(vec![]) }
-        }
-
-        fn get_object(
-            &self,
-            namespace: &str,
-            kind: &str,
-            name: &str,
-        ) -> impl Future<Output = Result<Option<ReturnObject<Value>>, DawnStoreError>> + Send
-        {
-            let key = object_string_id(namespace, kind, name);
-            // Drop the lock before the async block so the guard doesn't cross an await.
-            let result = {
-                let objects = self.objects.lock().unwrap();
-                objects
-                    .get(&key)
-                    .map(|v| serde_json::from_value::<ReturnObject<Value>>(v.clone()).unwrap())
-            };
-            async move { Ok(result) }
-        }
-
-        fn delete_object(
-            &self,
-            namespace: &str,
-            kind: &str,
-            name: &str,
-        ) -> impl Future<Output = Result<(), DawnStoreError>> + Send {
-            let key = object_string_id(namespace, kind, name);
-            self.objects.lock().unwrap().remove(&key);
-            async move { Ok(()) }
-        }
-
-        fn upsert_objects(
-            &self,
-            objects: Vec<ObjectAny>,
-            _relations: Vec<ObjectRelation>,
-        ) -> impl Future<Output = Result<Vec<ReturnObject<Value>>, DawnStoreError>> + Send {
-            let results: Vec<ReturnObject<Value>> = objects
-                .into_iter()
-                .map(|obj| ReturnObject {
-                    id: Uuid::new_v4(),
-                    created_at: Utc::now(),
-                    updated_at: Utc::now(),
-                    annotations: obj.annotations,
-                    labels: obj.labels,
-                    namespace: obj.namespace.unwrap_or_else(|| "default".to_string()),
-                    api_version: obj.api_version.unwrap_or_default(),
-                    kind: obj.kind.unwrap_or_default(),
-                    name: obj.name,
-                    spec: obj.spec,
-                })
-                .collect();
-            async move { Ok(results) }
-        }
-
-        fn get_resource_definitions(
-            &self,
-        ) -> impl Future<Output = Result<Vec<dawnstore_lib::ResourceDefinition>, DawnStoreError>> + Send
-        {
-            async move { Ok(vec![]) }
-        }
-    }
-
-    // ── Test helpers ──────────────────────────────────────────────────────────
-
-    fn make_claims(namespace: &str, sa_name: &str) -> Claims {
-        Claims {
-            sub: sa_name.to_string(),
-            namespace: namespace.to_string(),
-            token_name: "test-token".to_string(),
-            token_id: Uuid::new_v4(),
-            exp: u64::MAX,
-        }
-    }
-
-    /// A permissive schema that accepts any object.
-    fn permissive_schema(api_version: &str, kind: &str) -> RawSchema {
-        RawSchema {
-            api_version: api_version.to_string(),
-            kind: kind.to_string(),
-            aliases: vec![],
-            json_schema: r#"{"type": "object"}"#.to_string(),
-        }
-    }
+    // ── Test-local helpers ────────────────────────────────────────────────────
 
     /// A strict schema that requires an integer `value` field and nothing else.
-    fn strict_schema(api_version: &str, kind: &str) -> RawSchema {
-        RawSchema {
+    fn strict_schema(api_version: &str, kind: &str) -> crate::abstractions::RawSchema {
+        crate::abstractions::RawSchema {
             api_version: api_version.to_string(),
             kind: kind.to_string(),
             aliases: vec![],
@@ -172,26 +26,25 @@ mod tests {
         }
     }
 
-    fn make_fk(
-        api_version: &str,
-        kind: &str,
-        key_path: &str,
-        ty: ForeignKeyType,
-        foreign_key_kind: Option<&str>,
-    ) -> RawForeignKeyConstraint {
-        RawForeignKeyConstraint {
-            id: Uuid::new_v4(),
-            api_version: api_version.to_string(),
-            kind: kind.to_string(),
-            key_path: key_path.to_string(),
-            ty,
-            behaviour: ForeignKeyBehaviour::Fill,
-            foreign_key_kind: foreign_key_kind.map(|s| s.to_string()),
-            parent_key_path: None,
+    /// Build a single-object apply input. `spec` fields are merged at the top level
+    /// because `Object<T>` uses `#[serde(flatten)]` on its spec.
+    fn single_object(namespace: &str, api_version: &str, kind: &str, name: &str, spec: Value) -> Value {
+        let mut obj = json!({
+            "namespace": namespace,
+            "api_version": api_version,
+            "kind": kind,
+            "name": name,
+        });
+        if let (Some(obj_map), Some(spec_map)) = (obj.as_object_mut(), spec.as_object()) {
+            for (k, v) in spec_map {
+                obj_map.insert(k.clone(), v.clone());
+            }
         }
+        obj
     }
 
-    fn make_return_object(
+    /// A `ReturnObject` with a custom spec, used when the FK walk needs spec content.
+    fn make_return_object_with_spec(
         namespace: &str,
         api_version: &str,
         kind: &str,
@@ -210,53 +63,6 @@ mod tests {
             name: name.to_string(),
             spec,
         }
-    }
-
-    /// Build a single-object apply input. `spec` fields are merged at the top level
-    /// because `Object<T>` uses `#[serde(flatten)]` on its spec.
-    fn single_object(
-        namespace: &str,
-        api_version: &str,
-        kind: &str,
-        name: &str,
-        spec: Value,
-    ) -> Value {
-        let mut obj = json!({
-            "namespace": namespace,
-            "api_version": api_version,
-            "kind": kind,
-            "name": name,
-        });
-        if let (Some(obj_map), Some(spec_map)) = (obj.as_object_mut(), spec.as_object()) {
-            for (k, v) in spec_map {
-                obj_map.insert(k.clone(), v.clone());
-            }
-        }
-        obj
-    }
-
-    /// Grants `verbs` on all api_versions and all kinds.
-    fn wildcard_grant(verbs: &[Verb]) -> GrantedScope {
-        GrantedScope {
-            api_version: "*".to_string(),
-            kinds: vec!["*".to_string()],
-            verbs: verbs.iter().copied().collect(),
-            names: None,
-        }
-    }
-
-    /// Grants `verbs` on all api_versions for a specific `kind`.
-    fn kind_grant(kind: &str, verbs: &[Verb]) -> GrantedScope {
-        GrantedScope {
-            api_version: "*".to_string(),
-            kinds: vec![kind.to_string()],
-            verbs: verbs.iter().copied().collect(),
-            names: None,
-        }
-    }
-
-    async fn init_cache(backend: &MockBackend) -> DawnstoreCache {
-        DawnstoreCache::init(backend).await.unwrap()
     }
 
     // ── Positive tests ────────────────────────────────────────────────────────
@@ -335,7 +141,7 @@ mod tests {
             .with_schema(permissive_schema("v1", "Car"))
             .with_schema(permissive_schema("v1", "Owner"))
             .with_fk(fk)
-            .with_object(make_return_object("default", "v1", "Owner", "alice", json!({})));
+            .with_object(make_return_object("default", "v1", "Owner", "alice"));
         let cache = init_cache(&backend).await;
 
         let input = single_object("default", "v1", "Car", "car1", json!({"owner": "alice"}));
@@ -351,7 +157,6 @@ mod tests {
             MockBackend::new().with_schema(permissive_schema("v1", "Car")).with_fk(fk);
         let cache = init_cache(&backend).await;
 
-        // Spec has no `owner` field.
         let input = single_object("default", "v1", "Car", "car1", json!({}));
         let result = apply(&backend, &cache, None, input).await;
         assert!(result.is_ok());
@@ -364,19 +169,11 @@ mod tests {
         let backend = MockBackend::new()
             .with_schema(permissive_schema("v1", "Container"))
             .with_fk(fk)
-            .with_object(make_return_object(
-                "default",
-                "v1",
-                "Container",
-                "parent-a",
-                json!({"parent": "grandparent-b"}),
+            .with_object(make_return_object_with_spec(
+                "default", "v1", "Container", "parent-a", json!({"parent": "grandparent-b"}),
             ))
-            .with_object(make_return_object(
-                "default",
-                "v1",
-                "Container",
-                "grandparent-b",
-                json!({}),
+            .with_object(make_return_object_with_spec(
+                "default", "v1", "Container", "grandparent-b", json!({}),
             ));
         let cache = init_cache(&backend).await;
 
@@ -394,7 +191,7 @@ mod tests {
             .with_schema(permissive_schema("v1", "Car"))
             .with_schema(permissive_schema("v1", "Owner"))
             .with_fk(fk)
-            .with_object(make_return_object("default", "v1", "Owner", "alice", json!({})));
+            .with_object(make_return_object("default", "v1", "Owner", "alice"));
         let cache = init_cache(&backend).await;
 
         let caller = make_claims("default", "svc-a");
@@ -422,7 +219,6 @@ mod tests {
         let cache = init_cache(&backend).await;
 
         let caller = make_claims("default", "svc-a");
-        // No permissions injected.
 
         let input = single_object("default", "v1", "Car", "my-car", json!({}));
         let result = apply(&backend, &cache, Some(&caller), input).await;
@@ -436,7 +232,7 @@ mod tests {
         let backend = MockBackend::new()
             .with_schema(permissive_schema("v1", "Car"))
             .with_fk(fk)
-            .with_object(make_return_object("default", "v1", "Owner", "alice", json!({})));
+            .with_object(make_return_object("default", "v1", "Owner", "alice"));
         let cache = init_cache(&backend).await;
 
         let caller = make_claims("default", "svc-a");
@@ -483,8 +279,7 @@ mod tests {
         let backend = MockBackend::new();
         let cache = init_cache(&backend).await;
 
-        let result = apply(&backend, &cache, None, json!({"name": "foo", "api_version": "v1"}))
-            .await;
+        let result = apply(&backend, &cache, None, json!({"name": "foo", "api_version": "v1"})).await;
         assert!(matches!(result, Err(DawnStoreError::InvalidInputObjectMissingKindField)));
     }
 
@@ -494,8 +289,8 @@ mod tests {
         let backend = MockBackend::new();
         let cache = init_cache(&backend).await;
 
-        let result = apply(&backend, &cache, None, json!({"kind": "List", "object_kind": "Car"}))
-            .await;
+        let result =
+            apply(&backend, &cache, None, json!({"kind": "List", "object_kind": "Car"})).await;
         assert!(matches!(result, Err(DawnStoreError::InvalidInputObjectMissingListFieldOfList)));
     }
 
@@ -507,7 +302,6 @@ mod tests {
         let backend = MockBackend::new().with_schema(strict_schema("v1", "Strict"));
         let cache = init_cache(&backend).await;
 
-        // Spec is missing the required `value` field.
         let input = single_object("default", "v1", "Strict", "obj1", json!({}));
         let result = apply(&backend, &cache, None, input).await;
         assert!(matches!(result, Err(DawnStoreError::ObjectValidationError { .. })));
@@ -516,7 +310,7 @@ mod tests {
     /// An object whose kind has no registered schema is rejected.
     #[tokio::test]
     async fn test_no_schema_for_kind_returns_error() {
-        let backend = MockBackend::new(); // no schemas
+        let backend = MockBackend::new();
         let cache = init_cache(&backend).await;
 
         let input = single_object("default", "v1", "Unknown", "obj1", json!({}));
@@ -534,13 +328,9 @@ mod tests {
             MockBackend::new().with_schema(permissive_schema("v1", "Car")).with_fk(fk);
         let cache = init_cache(&backend).await;
 
-        // Spec has no `owner` field.
         let input = single_object("default", "v1", "Car", "car1", json!({}));
         let result = apply(&backend, &cache, None, input).await;
-        assert!(matches!(
-            result,
-            Err(DawnStoreError::ObjectValidationMissingForeignKeyEntry { .. })
-        ));
+        assert!(matches!(result, Err(DawnStoreError::ObjectValidationMissingForeignKeyEntry { .. })));
     }
 
     /// A required FK whose target does not exist in the backend is rejected.
@@ -551,13 +341,9 @@ mod tests {
             MockBackend::new().with_schema(permissive_schema("v1", "Car")).with_fk(fk);
         let cache = init_cache(&backend).await;
 
-        let input =
-            single_object("default", "v1", "Car", "car1", json!({"owner": "nonexistent"}));
+        let input = single_object("default", "v1", "Car", "car1", json!({"owner": "nonexistent"}));
         let result = apply(&backend, &cache, None, input).await;
-        assert!(matches!(
-            result,
-            Err(DawnStoreError::ObjectValidationForeignKeyNotFound { .. })
-        ));
+        assert!(matches!(result, Err(DawnStoreError::ObjectValidationForeignKeyNotFound { .. })));
     }
 
     /// A FK value with too many path segments (4+) is rejected.
@@ -568,13 +354,9 @@ mod tests {
             MockBackend::new().with_schema(permissive_schema("v1", "Car")).with_fk(fk);
         let cache = init_cache(&backend).await;
 
-        // "a/b/c/d" has four segments → format error.
         let input = single_object("default", "v1", "Car", "car1", json!({"owner": "a/b/c/d"}));
         let result = apply(&backend, &cache, None, input).await;
-        assert!(matches!(
-            result,
-            Err(DawnStoreError::ObjectValidationWrongForeignKeyEntryFormat { .. })
-        ));
+        assert!(matches!(result, Err(DawnStoreError::ObjectValidationWrongForeignKeyEntryFormat { .. })));
     }
 
     /// A FK value whose kind segment does not match the constraint's `foreign_key_kind` is rejected.
@@ -585,13 +367,8 @@ mod tests {
             MockBackend::new().with_schema(permissive_schema("v1", "Car")).with_fk(fk);
         let cache = init_cache(&backend).await;
 
-        // "WrongKind/alice" has kind segment "WrongKind" but constraint expects "Owner".
-        let input =
-            single_object("default", "v1", "Car", "car1", json!({"owner": "WrongKind/alice"}));
+        let input = single_object("default", "v1", "Car", "car1", json!({"owner": "WrongKind/alice"}));
         let result = apply(&backend, &cache, None, input).await;
-        assert!(matches!(
-            result,
-            Err(DawnStoreError::ObjectValidationWrongForeignKeyEntryKind { .. })
-        ));
+        assert!(matches!(result, Err(DawnStoreError::ObjectValidationWrongForeignKeyEntryKind { .. })));
     }
 }

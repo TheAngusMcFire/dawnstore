@@ -124,6 +124,12 @@ fn to_api_error(err: DawnStoreError) -> DawnStoreApiError {
             message: e.to_string(),
         },
         DawnStoreError::Forbidden => DawnStoreApiError::Forbidden,
+        DawnStoreError::DeleteBlockedByReferences { target, referencing } => {
+            DawnStoreApiError::ValidationError {
+                name: target,
+                message: format!("object is still referenced by: {referencing}"),
+            }
+        }
         DawnStoreError::DatabaseError(_)
         | DawnStoreError::InternalServerError(_)
         | DawnStoreError::JsonSchemaValidatorCreationError(_) => DawnStoreApiError::InternalError,

@@ -1,203 +1,21 @@
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-    use std::future::Future;
-
-    use chrono::Utc;
-    use dawnstore_lib::{GetObjectsFilter, ObjectAny, ReturnObject};
-    use serde_json::{json, Value};
+    use dawnstore_lib::GetObjectsFilter;
     use uuid::Uuid;
 
-    use crate::abstractions::{
-        BackendGetObjectsFilter, NewDawnStoreBackend, ObjectRelation, RawForeignKeyConstraint,
-        RawSchema,
-    };
-    use crate::cache::DawnstoreCache;
     use crate::error::DawnStoreError;
     use crate::handlers::get::get;
+    use crate::handlers::test_common::{
+        MockBackend, init_cache, make_claims, make_return_object, permissive_schema,
+        schema_with_aliases, wildcard_grant,
+    };
     use crate::rbac::cache::{EffectivePermissions, GrantedScope, Verb};
-    use crate::rbac::helpers::object_string_id;
     use crate::rbac::middleware::Claims;
 
-    // ── MockBackend ───────────────────────────────────────────────────────────
-
-    struct MockBackend {
-        schemas: Vec<RawSchema>,
-        objects: std::sync::Mutex<HashMap<String, Value>>,
-    }
-
-    impl MockBackend {
-        fn new() -> Self {
-            Self { schemas: vec![], objects: std::sync::Mutex::new(HashMap::new()) }
-        }
-
-        fn with_schema(mut self, schema: RawSchema) -> Self {
-            self.schemas.push(schema);
-            self
-        }
-
-        fn with_object(self, obj: ReturnObject<Value>) -> Self {
-            let key = object_string_id(&obj.namespace, &obj.kind, &obj.name);
-            let value = serde_json::to_value(&obj).unwrap();
-            self.objects.lock().unwrap().insert(key, value);
-            self
-        }
-    }
-
-    impl NewDawnStoreBackend for MockBackend {
-        fn load_all_schemas(
-            &self,
-        ) -> impl Future<Output = Result<Vec<RawSchema>, DawnStoreError>> + Send {
-            let schemas = self.schemas.clone();
-            async move { Ok(schemas) }
-        }
-
-        fn load_all_foreign_key_constraints(
-            &self,
-        ) -> impl Future<Output = Result<Vec<RawForeignKeyConstraint>, DawnStoreError>> + Send
-        {
-            async move { Ok(vec![]) }
-        }
-
-        fn get_objects(
-            &self,
-            filter: &BackendGetObjectsFilter,
-        ) -> impl Future<Output = Result<Vec<ReturnObject<Value>>, DawnStoreError>> + Send {
-            let filter_ns = filter.namespace.clone();
-            let filter_kind = filter.kind.clone();
-            let filter_name = filter.name.clone();
-            let filter_allowed = filter.allowed.clone();
-
-            let results: Vec<ReturnObject<Value>> = {
-                let map = self.objects.lock().unwrap();
-                map.values()
-                    .map(|v| serde_json::from_value::<ReturnObject<Value>>(v.clone()).unwrap())
-                    .filter(|obj| {
-                        filter_ns.as_deref().map_or(true, |ns| obj.namespace == ns)
-                            && filter_kind.as_deref().map_or(true, |k| obj.kind == k)
-                            && filter_name.as_deref().map_or(true, |n| obj.name == n)
-                            && filter_allowed.as_ref().map_or(true, |allowed| {
-                                if allowed.is_empty() {
-                                    return false;
-                                }
-                                allowed.iter().any(|scope| {
-                                    scope
-                                        .namespace
-                                        .as_deref()
-                                        .map_or(true, |ns| ns == obj.namespace)
-                                        && (scope.kind == "*" || scope.kind == obj.kind)
-                                        && scope.names.as_ref().map_or(true, |names| {
-                                            names.contains(&obj.name)
-                                        })
-                                })
-                            })
-                    })
-                    .collect()
-            };
-            async move { Ok(results) }
-        }
-
-        fn get_object(
-            &self,
-            namespace: &str,
-            kind: &str,
-            name: &str,
-        ) -> impl Future<Output = Result<Option<ReturnObject<Value>>, DawnStoreError>> + Send
-        {
-            let key = object_string_id(namespace, kind, name);
-            let result = {
-                let objects = self.objects.lock().unwrap();
-                objects
-                    .get(&key)
-                    .map(|v| serde_json::from_value::<ReturnObject<Value>>(v.clone()).unwrap())
-            };
-            async move { Ok(result) }
-        }
-
-        fn upsert_objects(
-            &self,
-            _objects: Vec<ObjectAny>,
-            _relations: Vec<ObjectRelation>,
-        ) -> impl Future<Output = Result<Vec<ReturnObject<Value>>, DawnStoreError>> + Send {
-            async move { Ok(vec![]) }
-        }
-
-        fn delete_object(
-            &self,
-            namespace: &str,
-            kind: &str,
-            name: &str,
-        ) -> impl Future<Output = Result<(), DawnStoreError>> + Send {
-            let key = object_string_id(namespace, kind, name);
-            self.objects.lock().unwrap().remove(&key);
-            async move { Ok(()) }
-        }
-
-        fn get_resource_definitions(
-            &self,
-        ) -> impl Future<Output = Result<Vec<dawnstore_lib::ResourceDefinition>, DawnStoreError>> + Send
-        {
-            async move { Ok(vec![]) }
-        }
-    }
-
-    // ── Helpers ───────────────────────────────────────────────────────────────
-
-    fn make_claims(namespace: &str, sa_name: &str) -> Claims {
-        Claims {
-            sub: sa_name.to_string(),
-            namespace: namespace.to_string(),
-            token_name: "test-token".to_string(),
-            token_id: Uuid::new_v4(),
-            exp: u64::MAX,
-        }
-    }
-
-    fn permissive_schema(api_version: &str, kind: &str) -> RawSchema {
-        RawSchema {
-            api_version: api_version.to_string(),
-            kind: kind.to_string(),
-            aliases: vec![],
-            json_schema: r#"{"type": "object"}"#.to_string(),
-        }
-    }
-
-    fn schema_with_aliases(api_version: &str, kind: &str, aliases: &[&str]) -> RawSchema {
-        RawSchema {
-            api_version: api_version.to_string(),
-            kind: kind.to_string(),
-            aliases: aliases.iter().map(|s| s.to_string()).collect(),
-            json_schema: r#"{"type": "object"}"#.to_string(),
-        }
-    }
-
-    fn make_return_object(
-        namespace: &str,
-        api_version: &str,
-        kind: &str,
-        name: &str,
-    ) -> ReturnObject<Value> {
-        ReturnObject {
-            id: Uuid::new_v4(),
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
-            annotations: None,
-            labels: None,
-            namespace: namespace.to_string(),
-            api_version: api_version.to_string(),
-            kind: kind.to_string(),
-            name: name.to_string(),
-            spec: json!({}),
-        }
-    }
+    // ── Test-local helpers ────────────────────────────────────────────────────
 
     fn wildcard_get() -> GrantedScope {
-        GrantedScope {
-            api_version: "*".to_string(),
-            kinds: vec!["*".to_string()],
-            verbs: [Verb::Get].into_iter().collect(),
-            names: None,
-        }
+        wildcard_grant(&[Verb::Get])
     }
 
     fn kind_get(kind: &str) -> GrantedScope {
@@ -211,10 +29,6 @@ mod tests {
 
     fn filter_kind(kind: &str) -> GetObjectsFilter {
         GetObjectsFilter { kind: Some(kind.to_string()), ..Default::default() }
-    }
-
-    async fn init_cache(backend: &MockBackend) -> DawnstoreCache {
-        DawnstoreCache::init(backend).await.unwrap()
     }
 
     // ── Positive tests ────────────────────────────────────────────────────────
@@ -261,7 +75,6 @@ mod tests {
             .with_object(make_return_object("default", "v1", "Car", "car1"));
         let cache = init_cache(&backend).await;
 
-        // Query using the alias "cars".
         let result = get(&backend, &cache, None, filter_kind("cars")).await.unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].kind, "Car");
@@ -324,7 +137,7 @@ mod tests {
     /// Querying an unregistered kind returns UnknownResourceKind.
     #[tokio::test]
     async fn test_unknown_kind_returns_error() {
-        let backend = MockBackend::new(); // no schemas
+        let backend = MockBackend::new();
         let cache = init_cache(&backend).await;
 
         let result = get(&backend, &cache, None, filter_kind("Unknown")).await;
@@ -340,11 +153,8 @@ mod tests {
         let cache = init_cache(&backend).await;
 
         let caller = make_claims("default", "svc-a");
-        // No permissions injected — SA has no grants at all.
 
-        let result =
-            get(&backend, &cache, Some(&caller), filter_kind("Car")).await.unwrap();
-        // Must return empty, not Forbidden.
+        let result = get(&backend, &cache, Some(&caller), filter_kind("Car")).await.unwrap();
         assert!(result.is_empty());
     }
 
@@ -363,13 +173,12 @@ mod tests {
             "default",
             "svc-a",
             EffectivePermissions {
-                namespaced: vec![kind_get("Car")], // Get on Car only
+                namespaced: vec![kind_get("Car")],
                 global: vec![],
             },
             vec![],
         );
 
-        // Query for all objects — RBAC should filter out Secret.
         let result =
             get(&backend, &cache, Some(&caller), GetObjectsFilter::default()).await.unwrap();
         assert!(result.iter().all(|o| o.kind == "Car"), "should not see Secret objects");
@@ -390,25 +199,21 @@ mod tests {
             "svc-global",
             EffectivePermissions {
                 namespaced: vec![],
-                global: vec![wildcard_get()], // global grant
+                global: vec![wildcard_get()],
             },
             vec![],
         );
 
-        let result =
-            get(&backend, &cache, Some(&caller), filter_kind("Car")).await.unwrap();
+        let result = get(&backend, &cache, Some(&caller), filter_kind("Car")).await.unwrap();
         assert_eq!(result.len(), 2);
     }
 
-    /// Querying with an unknown alias via a registered alias resolves correctly
-    /// but unknown non-alias returns error.
+    /// Unknown non-alias returns error.
     #[tokio::test]
     async fn test_unknown_alias_returns_error() {
-        let backend =
-            MockBackend::new().with_schema(schema_with_aliases("v1", "Car", &["cars"]));
+        let backend = MockBackend::new().with_schema(schema_with_aliases("v1", "Car", &["cars"]));
         let cache = init_cache(&backend).await;
 
-        // "automobiles" is not an alias for Car.
         let result = get(&backend, &cache, None, filter_kind("automobiles")).await;
         assert!(matches!(result, Err(DawnStoreError::UnknownResourceKind(_))));
     }
@@ -422,7 +227,6 @@ mod tests {
             .with_object(make_return_object("ns-b", "v1", "Car", "car-b"));
         let cache = init_cache(&backend).await;
 
-        // SA is in ns-a with a namespaced Get grant.
         let caller = make_claims("ns-a", "svc-a");
         cache.insert_permissions(
             "ns-a",
@@ -432,7 +236,6 @@ mod tests {
         );
 
         let result = get(&backend, &cache, Some(&caller), filter_kind("Car")).await.unwrap();
-        // Namespaced grant applies only to ns-a; ns-b objects are excluded.
         assert!(result.iter().all(|o| o.namespace == "ns-a"));
     }
 
@@ -456,9 +259,7 @@ mod tests {
             exp: u64::MAX,
         };
 
-        // No permissions injected — but superadmin bypasses all checks.
-        let result =
-            get(&backend, &cache, Some(&caller), filter_kind("Car")).await.unwrap();
+        let result = get(&backend, &cache, Some(&caller), filter_kind("Car")).await.unwrap();
         assert_eq!(result.len(), 2);
     }
 }

@@ -310,6 +310,28 @@ pub async fn get_api_object_infos_with_filter(pool: &mut PgConnection, filter: &
     query_builder.build_query_as::<ApiObjectInfo>().fetch_all(pool).await
 }
 
+/// Return the string IDs of all objects that have an inbound FK relation to the
+/// object identified by `string_id`. Used by the delete handler to block deletes
+/// when referencing objects exist.
+pub async fn get_objects_referencing(
+    pool: &mut PgConnection,
+    string_id: &str,
+) -> Result<Vec<String>, sqlx::Error> {
+    sqlx::query_scalar!(
+        r#"
+        SELECT o.string_id
+        FROM relations r
+        JOIN objects o ON r.object_id = o.id
+        WHERE r.foreign_object_id = (
+            SELECT id FROM objects WHERE string_id = $1
+        )
+        "#,
+        string_id,
+    )
+    .fetch_all(pool)
+    .await
+}
+
 pub async fn delete_object(pool: &mut PgConnection, namespace: Option<&str>, name: &str, kind: &str) -> Result<(), sqlx::Error> {
     let mut qb = QueryBuilder::<sqlx::Postgres>::new("DELETE FROM objects WHERE name = ");
     qb.push_bind(name).push(" and kind = ").push_bind(kind);

@@ -229,6 +229,17 @@ pub trait NewDawnStoreBackend: Send + Sync {
     fn get_resource_definitions(
         &self,
     ) -> impl Future<Output = Result<Vec<ResourceDefinition>, DawnStoreError>> + Send;
+
+    /// Return the string IDs (`namespace/kind/name`) of all objects that hold an
+    /// inbound FK relation pointing at `(namespace, kind, name)`.
+    ///
+    /// Used by the delete handler to block deletes when referencing objects exist.
+    fn get_inbound_references(
+        &self,
+        namespace: &str,
+        kind: &str,
+        name: &str,
+    ) -> impl Future<Output = Result<Vec<String>, DawnStoreError>> + Send;
 }
 
 // ── DawnstoreBackend trait ────────────────────────────────────────────────────

@@ -664,4 +664,18 @@ impl NewDawnStoreBackend for PostgresBackend {
                 .collect())
         }
     }
+
+    fn get_inbound_references(
+        &self,
+        namespace: &str,
+        kind: &str,
+        name: &str,
+    ) -> impl std::future::Future<Output = Result<Vec<String>, DawnStoreError>> + Send {
+        let pool = self.pool.clone();
+        let string_id = object_string_id(namespace, kind, name);
+        async move {
+            let mut con = pool.acquire().await?;
+            Ok(queries::get_objects_referencing(con.as_mut(), &string_id).await?)
+        }
+    }
 }

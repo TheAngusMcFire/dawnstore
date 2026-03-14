@@ -84,4 +84,6 @@ pub enum DawnStoreError {
     NamespaceCanOnlyBeCreatedInSystemNamespace(String),
     #[error("Forbidden")]
     Forbidden,
+    #[error("Cannot delete object '{target}': still referenced by: {referencing}")]
+    DeleteBlockedByReferences { target: String, referencing: String },
 }

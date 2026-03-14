@@ -91,8 +91,11 @@ fn is_rbac_kind(kind: &str) -> bool {
 /// 2. If `caller` is authenticated (and is not the system superadmin), verify that
 ///    the caller holds `Delete` permission on `(namespace, kind, name)`.
 ///    Returns [`DawnStoreError::Forbidden`] if denied.
-/// 3. Delete the object from the backend (idempotent — no error if it doesn't exist).
-/// 4. If the deleted object is an RBAC resource (`Role`, `RoleBinding`, `GlobalRole`,
+/// 3. Check that no other objects hold an inbound FK relation to this object.
+///    Returns [`DawnStoreError::DeleteBlockedByReferences`] if any exist, because
+///    deleting the object would leave those FK fields pointing at a non-existent target.
+/// 4. Delete the object from the backend (idempotent — no error if it doesn't exist).
+/// 5. If the deleted object is an RBAC resource (`Role`, `RoleBinding`, `GlobalRole`,
 ///    or `GlobalRoleBinding`), evict all permission-cache entries derived from it so
 ///    that downstream Get / Apply checks reflect the change immediately.
 pub async fn delete<B: NewDawnStoreBackend>(
@@ -108,10 +111,19 @@ pub async fn delete<B: NewDawnStoreBackend>(
     // Step 2: permission check.
     check_delete_permission(cache, backend, caller, namespace, &kind, &request.name).await?;
 
-    // Step 3: delete from backend.
+    // Step 3: reject if other objects still reference this one via FK relations.
+    let refs = backend.get_inbound_references(namespace, &kind, &request.name).await?;
+    if !refs.is_empty() {
+        return Err(DawnStoreError::DeleteBlockedByReferences {
+            target: object_string_id(namespace, &kind, &request.name),
+            referencing: refs.join(", "),
+        });
+    }
+
+    // Step 4: delete from backend.
     backend.delete_object(namespace, &kind, &request.name).await?;
 
-    // Step 4: invalidate RBAC cache for deleted RBAC resources.
+    // Step 5: invalidate RBAC cache for deleted RBAC resources.
     if is_rbac_kind(&kind) {
         cache.invalidate_permissions(&object_string_id(namespace, &kind, &request.name));
     }
