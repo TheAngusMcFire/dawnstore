@@ -58,7 +58,9 @@ This is a Cargo workspace with 5 crates implementing a Kubernetes-like generic o
 
 **Foreign keys**: Relations between objects are declared at schema registration time using `ForeignKey` structs (path, type, optional kind constraint). Types are `One`, `OneOptional`, `OneOrMany`, `NoneOrMany`. FK values in object specs are strings formatted as `name`, `kind/name`, or `namespace/kind/name`. Relations are stored in a separate `relations` table and can be populated into responses via `fill_child_foreign_keys`.
 
-**Apply semantics**: `POST /apply` accepts a single object, an array, or a `List` wrapper object. It upserts objects (insert-or-update by UUID, keyed on string_id) and reconciles the relations table.
+**Apply semantics**: `POST /apply` accepts a single object, an array, or a `ListOfObjects` wrapper. It upserts objects (insert-or-update by UUID, keyed on string_id) and reconciles the relations table.
+
+`ListOfObjects` supports **implied properties**: if `object_kind` and/or `object_api_version` are set on the list wrapper, any item inside `list` that is missing its own `kind` or `api_version` inherits those values. This means callers can omit `kind`/`api_version` on every individual item when all objects in the list share the same kind and version.
 
 **Migrations**: Located at `dawnstore-core/migrations/`. Run via sqlx's `sqlx::migrate!("./migrations")` macro — path is relative to the `dawnstore-core` crate root.
 
