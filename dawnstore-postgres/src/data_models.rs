@@ -8,7 +8,7 @@ use sqlx::{
     },
 };
 
-use dawnstore_core::models::{ForeignKeyBehaviour, ForeignKeyType};
+use dawnstore_core::abstractions::{ForeignKeyBehaviour, ForeignKeyType};
 
 #[derive(FromRow)]
 pub struct ForeignKeyConstraint {

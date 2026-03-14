@@ -1,7 +1,7 @@
 use jsonschema::ValidationError;
 use thiserror::Error;
 
-use crate::models::ForeignKeyType;
+use crate::abstractions::ForeignKeyType;
 
 #[derive(Error, Debug)]
 pub enum DawnStoreError {

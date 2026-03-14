@@ -9,7 +9,7 @@ use axum::{
 };
 use dawnstore_lib::*;
 
-use crate::backend::DawnstoreBackend;
+use crate::abstractions::DawnstoreBackend;
 
 pub fn get_dawnstore_default_routes<B>(backend: Arc<B>) -> Router
 where

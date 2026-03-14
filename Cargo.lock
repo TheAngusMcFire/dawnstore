@@ -537,6 +537,7 @@ dependencies = [
  "dawnstore-core",
  "dawnstore-lib",
  "dawnstore-postgres",
+ "schemars",
  "serde",
  "serde_json",
  "tokio",
@@ -575,6 +576,7 @@ name = "dawnstore-core"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "chrono",
  "dawnstore-lib",
  "jsonschema",
  "schemars",
@@ -621,6 +623,8 @@ dependencies = [
  "dawnstore-core",
  "dawnstore-lib",
  "dawnstore-postgres",
+ "schemars",
+ "serde",
  "serde_json",
  "sqlx",
  "tokio",

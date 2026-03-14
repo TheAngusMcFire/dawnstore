@@ -5,7 +5,7 @@ use serde_json::Value;
 use sqlx::PgConnection;
 use uuid::Uuid;
 
-use dawnstore_core::{error::DawnStoreError, models::ForeignKeyType};
+use dawnstore_core::{abstractions::ForeignKeyType, error::DawnStoreError};
 use dawnstore_lib::*;
 
 use super::{

@@ -3,7 +3,7 @@ use sqlx::{PgConnection, QueryBuilder};
 
 use super::data_models::{ApiObjectInfo, ForeignKeyConstraint, Object, ObjectInfo, ObjectSchema, Relation};
 use dawnstore_lib::*;
-use dawnstore_core::models::{ForeignKeyBehaviour, ForeignKeyType};
+use dawnstore_core::abstractions::{ForeignKeyBehaviour, ForeignKeyType};
 
 use sqlx::{PgPool, Result};
 use uuid::Uuid;

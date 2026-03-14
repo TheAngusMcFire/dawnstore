@@ -3,11 +3,15 @@ name = "dawnstore-testing"
 version = "0.1.0"
 edition = "2024"
 
+[dependencies]
+schemars.workspace = true
+serde.workspace = true
+dawnstore-lib = { path = "../dawnstore-lib" }
+
 [dev-dependencies]
 dawnstore-postgres = { path = "../dawnstore-postgres" }
 dawnstore-core = { path = "../dawnstore-core" }
 dawnstore-client-lib = { path = "../dawnstore-client-lib" }
-dawnstore-lib = { path = "../dawnstore-lib" }
 axum = { workspace = true }
 sqlx = { workspace = true }
 tokio = { workspace = true }

@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 use cache::CacheStore;
 use data_models::{ForeignKeyConstraint, ObjectInfo, ObjectSchema, Relation};
-use dawnstore_core::{backend::DawnstoreBackend, error::DawnStoreError, models::ForeignKey};
+use dawnstore_core::{abstractions::{DawnstoreBackend, ForeignKey}, error::DawnStoreError};
 use dawnstore_lib::*;
 
 mod apply_impl;
@@ -40,6 +40,7 @@ impl PostgresBackend {
         }
     }
 
+    /// Convenience wrapper for seeding a single schema from a Rust type.
     pub async fn seed_object_schema<T: schemars::JsonSchema>(
         &self,
         api_version: impl Into<String>,
@@ -47,47 +48,9 @@ impl PostgresBackend {
         aliases: impl IntoIterator<Item = impl Into<String>>,
         foreign_keys: impl IntoIterator<Item = ForeignKey>,
     ) -> Result<(), DawnStoreError> {
-        let api_version = api_version.into();
-        let kind = kind.into();
-        let mut trans = self.pool.begin().await?;
-        let obj = queries::get_object_schema(trans.as_mut(), &api_version, &kind).await?;
-        if obj.is_some() {
-            return Ok(());
-        }
-        let schema = schemars::schema_for!(T);
-        let schema_str = serde_json::to_string(&schema)?;
-        queries::insert_object_schema(
-            trans.as_mut(),
-            &ObjectSchema {
-                id: uuid::Uuid::new_v4(),
-                api_version: api_version.clone(),
-                kind: kind.clone(),
-                json_schema: schema_str.clone(),
-                aliases: aliases.into_iter().map(|x| x.into()).collect(),
-            },
-        )
-        .await?;
-        let mut keys = Vec::<ForeignKeyConstraint>::new();
-        for key in foreign_keys {
-            keys.push(ForeignKeyConstraint {
-                id: uuid::Uuid::new_v4(),
-                api_version: api_version.clone(),
-                kind: kind.clone(),
-                key_path: key.path,
-                r#type: key.ty,
-                behaviour: key.behaviour,
-                foreign_key_kind: key.foreign_kind,
-                parent_key_path: key.parent_path,
-            });
-        }
-        queries::insert_multiple_foreign_key_constraints(trans.as_mut(), keys.as_slice()).await?;
-        trans.commit().await?;
-
-        let validator = jsonschema::validator_for(&serde_json::from_str(&schema_str)?)?;
-        self.cache.insert_schema(&api_version, &kind, validator).await;
-        self.cache.insert_foreign_keys(&api_version, &kind, keys).await;
-
-        Ok(())
+        use dawnstore_core::abstractions::SchemaDefinition;
+        let def = SchemaDefinition::new::<T>(api_version, kind, aliases, foreign_keys);
+        self.seed_schema(&[def]).await
     }
 
     pub async fn sqlx_migrate(&self) -> Result<(), MigrateError> {
@@ -102,6 +65,54 @@ impl PostgresBackend {
 // ── DawnstoreBackend trait impl ───────────────────────────────────────────────
 
 impl DawnstoreBackend for PostgresBackend {
+    async fn seed_schema(
+        &self,
+        schemas: &[dawnstore_core::abstractions::SchemaDefinition],
+    ) -> Result<(), DawnStoreError> {
+        // Collect the schemas that aren't registered yet, then insert them all
+        // in a single transaction.
+        let mut trans = self.pool.begin().await?;
+        let mut new_schemas: Vec<(&dawnstore_core::abstractions::SchemaDefinition, Vec<ForeignKeyConstraint>)> = Vec::new();
+
+        for def in schemas {
+            if queries::get_object_schema(trans.as_mut(), &def.api_version, &def.kind).await?.is_some() {
+                continue;
+            }
+            queries::insert_object_schema(
+                trans.as_mut(),
+                &ObjectSchema {
+                    id: uuid::Uuid::new_v4(),
+                    api_version: def.api_version.clone(),
+                    kind: def.kind.clone(),
+                    json_schema: def.json_schema.clone(),
+                    aliases: def.aliases.clone(),
+                },
+            )
+            .await?;
+            let keys: Vec<ForeignKeyConstraint> = def.foreign_keys.iter().map(|key| ForeignKeyConstraint {
+                id: uuid::Uuid::new_v4(),
+                api_version: def.api_version.clone(),
+                kind: def.kind.clone(),
+                key_path: key.path.clone(),
+                r#type: key.ty.clone(),
+                behaviour: key.behaviour.clone(),
+                foreign_key_kind: key.foreign_kind.clone(),
+                parent_key_path: key.parent_path.clone(),
+            }).collect();
+            queries::insert_multiple_foreign_key_constraints(trans.as_mut(), &keys).await?;
+            new_schemas.push((def, keys));
+        }
+        trans.commit().await?;
+
+        for (def, keys) in new_schemas {
+            let validator = jsonschema::validator_for(&serde_json::from_str(&def.json_schema)?)?;
+            self.cache.insert_schema(&def.api_version, &def.kind, validator).await;
+            self.cache.insert_foreign_keys(&def.api_version, &def.kind, keys).await;
+        }
+
+        Ok(())
+    }
+
     async fn delete(&self, delete: &DeleteObject) -> Result<(), DawnStoreError> {
         let mut con = self.pool.acquire().await?;
         let ns = match &delete.namespace {
@@ -198,11 +209,11 @@ impl DawnstoreBackend for PostgresBackend {
                 }
 
                 if let (Some(seg), Value::Object(x)) = (last_segment, key_position) {
-                    use dawnstore_core::models::ForeignKeyType::*;
+                    use dawnstore_core::abstractions::ForeignKeyType;
                     let value = match fkc.r#type {
-                        One | OneOptional => serde_json::to_value(objs.pop())?,
-                        OneOrMany => serde_json::to_value(objs)?,
-                        NoneOrMany => serde_json::to_value(objs.pop())?,
+                        ForeignKeyType::One | ForeignKeyType::OneOptional => serde_json::to_value(objs.pop())?,
+                        ForeignKeyType::OneOrMany => serde_json::to_value(objs)?,
+                        ForeignKeyType::NoneOrMany => serde_json::to_value(objs.pop())?,
                     };
                     x.insert(seg.to_string(), value);
                 }

@@ -10,8 +10,9 @@ use std::sync::Arc;
 
 use axum::Router;
 use dawnstore_client_lib::Api;
-use dawnstore_core::models::{Container, ForeignKey, ForeignKeyType};
+use dawnstore_core::abstractions::{ForeignKey, ForeignKeyType};
 use dawnstore_core::controllers::get_dawnstore_default_routes;
+use dawnstore_testing::Container;
 use dawnstore_postgres::PostgresBackend;
 use dawnstore_lib::{DeleteObject, GetObjectsFilter};
 use sqlx::PgPool;

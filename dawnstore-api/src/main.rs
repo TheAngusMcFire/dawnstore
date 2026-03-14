@@ -2,10 +2,13 @@ use std::sync::Arc;
 
 use axum::Router;
 use color_eyre::eyre;
-use dawnstore_core::models::{Container, ForeignKey, ForeignKeyType};
+use dawnstore_core::abstractions::{ForeignKey, ForeignKeyType};
 use dawnstore_core::controllers::get_dawnstore_default_routes;
 use dawnstore_postgres::PostgresBackend;
 use tokio::net::TcpListener;
+
+mod models;
+use models::Container;
 
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
@@ -29,6 +32,7 @@ async fn main() -> eyre::Result<()> {
         )
         .await?;
 
+    dawnstore_core::rbac::init(&backend).await?;
     backend.warm_caches().await?;
 
     let backend = Arc::new(backend);
