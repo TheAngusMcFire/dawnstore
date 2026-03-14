@@ -118,6 +118,7 @@ pub async fn get<B: NewDawnStoreBackend>(
             kind,
             name: filter.name,
             allowed,
+            fill_child_foreign_keys: filter.fill_child_foreign_keys,
         })
         .await
 }

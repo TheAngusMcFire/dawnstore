@@ -163,6 +163,9 @@ pub struct BackendGetObjectsFilter {
     /// `None` = unrestricted (superadmin / unauthenticated path).
     /// `Some([])` = deny all (caller has no matching Get grants).
     pub allowed: Option<Vec<AllowedScope>>,
+    /// When `true`, the backend should populate `_object` navigation properties
+    /// on returned objects by following their FK relations.
+    pub fill_child_foreign_keys: bool,
 }
 
 /// Placeholder backend trait used during the cache-layer refactor.
@@ -221,6 +224,11 @@ pub trait NewDawnStoreBackend: Send + Sync {
         kind: &str,
         name: &str,
     ) -> impl Future<Output = Result<(), DawnStoreError>> + Send;
+
+    /// Return all registered resource definitions (schemas).
+    fn get_resource_definitions(
+        &self,
+    ) -> impl Future<Output = Result<Vec<ResourceDefinition>, DawnStoreError>> + Send;
 }
 
 // ── DawnstoreBackend trait ────────────────────────────────────────────────────

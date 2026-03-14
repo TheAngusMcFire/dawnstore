@@ -11,7 +11,8 @@ use std::sync::Arc;
 use axum::Router;
 use dawnstore_client_lib::Api;
 use dawnstore_core::abstractions::{ForeignKey, ForeignKeyType};
-use dawnstore_core::controllers::get_dawnstore_default_routes;
+use dawnstore_core::cache::DawnstoreCache;
+use dawnstore_core::controllers::get_dawnstore_new_routes;
 use dawnstore_testing::Container;
 use dawnstore_postgres::PostgresBackend;
 use dawnstore_lib::{DeleteObject, GetObjectsFilter};
@@ -41,8 +42,8 @@ async fn spawn_server(pool: PgPool) -> Api {
         .unwrap();
 
     let backend = Arc::new(backend);
-    let rbac_cache = Arc::new(dawnstore_core::rbac::RbacCache::new());
-    let app = Router::new().merge(get_dawnstore_default_routes(backend, rbac_cache));
+    let cache = Arc::new(DawnstoreCache::init(&*backend).await.unwrap());
+    let app = Router::new().merge(get_dawnstore_new_routes(backend, cache));
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base_url = format!("http://{}", listener.local_addr().unwrap());
 
@@ -597,8 +598,8 @@ async fn spawn_rbac_server(pool: PgPool) -> RbacTestServer {
             .expect("first startup must return a bootstrap token");
 
     let backend = Arc::new(backend);
-    let rbac_cache = Arc::new(dawnstore_core::rbac::RbacCache::new());
-    let dawnstore_routes = get_dawnstore_default_routes(Arc::clone(&backend), Arc::clone(&rbac_cache));
+    let cache = Arc::new(DawnstoreCache::init(&*backend).await.unwrap());
+    let dawnstore_routes = get_dawnstore_new_routes(Arc::clone(&backend), Arc::clone(&cache));
     let rbac_routes = dawnstore_core::rbac::get_rbac_routes(
         Arc::clone(&backend),
         keypair.private_key_pem.clone(),
@@ -783,8 +784,9 @@ async fn issue_token_superadmin_can_issue(pool: PgPool) -> sqlx::Result<()> {
     assert!(resp.status().is_success(), "status: {}", resp.status());
 
     let body: serde_json::Value = resp.json().await.unwrap();
-    let jwt = body["token"].as_str().expect("response must have a token field");
-    let token_id_str = body["token_id"].as_str().expect("response must have a token_id field");
+    let data = &body["data"];
+    let jwt = data["token"].as_str().expect("response must have a token field");
+    let token_id_str = data["token_id"].as_str().expect("response must have a token_id field");
     assert!(!jwt.is_empty());
     assert!(!token_id_str.is_empty());
 
@@ -840,7 +842,7 @@ async fn issue_token_non_superadmin_is_forbidden(pool: PgPool) -> sqlx::Result<(
     assert!(issue_resp.status().is_success(), "superadmin should be able to issue token");
 
     let regular_jwt = issue_resp.json::<serde_json::Value>().await.unwrap();
-    let regular_jwt = regular_jwt["token"].as_str().unwrap().to_string();
+    let regular_jwt = regular_jwt["data"]["token"].as_str().unwrap().to_string();
 
     // The regular token must itself be cryptographically valid.
     jwt_service::validate_token(&regular_jwt, &server.public_key_pem)
@@ -980,7 +982,7 @@ async fn issue_jwt(server: &RbacTestServer, namespace: &str, sa_name: &str, toke
         .await
         .unwrap();
     assert!(resp.status().is_success(), "failed to issue token");
-    resp.json::<serde_json::Value>().await.unwrap()["token"]
+    resp.json::<serde_json::Value>().await.unwrap()["data"]["token"]
         .as_str()
         .unwrap()
         .to_string()
@@ -1569,6 +1571,130 @@ async fn rbac_apply_allowed_when_fk_target_is_accessible(pool: PgPool) -> sqlx::
         resp["error"].is_null(),
         "apply must succeed when FK target is accessible: {resp}"
     );
+
+    Ok(())
+}
+
+// ── rbac-test.yaml fixture ────────────────────────────────────────────────────
+
+/// Apply all objects from examples/rbac-test.yaml in one batch (as superadmin),
+/// then verify that the resulting RBAC permissions are enforced correctly.
+///
+/// Fixture summary:
+///   - namespace "demo"
+///   - alice  → admin role  (get + apply + delete on *)
+///   - bob    → editor role (get + apply on *)
+///   - carol  → viewer role (get on *)
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn rbac_test_yaml_fixture_roles_are_enforced(pool: PgPool) -> sqlx::Result<()> {
+    let server = spawn_rbac_server(pool).await;
+    let sa = &server.bootstrap_token;
+
+    // Apply the full fixture in one shot (mirrors examples/rbac-test.yaml).
+    let resp = http_apply(&server, sa, serde_json::json!([
+        // namespace
+        {"api_version": "v1", "kind": "namespace", "namespace": "system", "name": "demo"},
+        // service accounts
+        {"api_version": "v1", "kind": "serviceaccount", "namespace": "demo", "name": "alice"},
+        {"api_version": "v1", "kind": "serviceaccount", "namespace": "demo", "name": "bob"},
+        {"api_version": "v1", "kind": "serviceaccount", "namespace": "demo", "name": "carol"},
+        // roles
+        {
+            "api_version": "v1", "kind": "role", "namespace": "demo", "name": "admin",
+            "rules": [{"api_version": "*", "kinds": ["*"], "verbs": ["get", "apply", "delete"]}]
+        },
+        {
+            "api_version": "v1", "kind": "role", "namespace": "demo", "name": "editor",
+            "rules": [{"api_version": "*", "kinds": ["*"], "verbs": ["get", "apply"]}]
+        },
+        {
+            "api_version": "v1", "kind": "role", "namespace": "demo", "name": "viewer",
+            "rules": [{"api_version": "*", "kinds": ["*"], "verbs": ["get"]}]
+        },
+        // role bindings
+        {
+            "api_version": "v1", "kind": "rolebinding", "namespace": "demo", "name": "alice-admin",
+            "role": "role/admin",
+            "subjects": ["serviceaccount/alice"]
+        },
+        {
+            "api_version": "v1", "kind": "rolebinding", "namespace": "demo", "name": "bob-editor",
+            "role": "role/editor",
+            "subjects": ["serviceaccount/bob"]
+        },
+        {
+            "api_version": "v1", "kind": "rolebinding", "namespace": "demo", "name": "carol-viewer",
+            "role": "role/viewer",
+            "subjects": ["serviceaccount/carol"]
+        }
+    ])).await;
+    assert!(resp["error"].is_null(), "fixture apply must succeed: {resp}");
+
+    // Issue JWTs for each SA.
+    let alice_jwt = issue_jwt(&server, "demo", "alice", "alice-token").await;
+    let bob_jwt   = issue_jwt(&server, "demo", "bob",   "bob-token").await;
+    let carol_jwt = issue_jwt(&server, "demo", "carol", "carol-token").await;
+
+    // ── alice (admin): get + apply + delete ───────────────────────────────────
+
+    let r = http_apply(&server, &alice_jwt, serde_json::json!({
+        "api_version": "v2", "kind": "container", "namespace": "demo", "name": "alice-box", "nr": 1
+    })).await;
+    assert!(r["error"].is_null(), "alice must be able to apply: {r}");
+
+    let r = http_get_objects(&server, &alice_jwt, serde_json::json!({
+        "namespace": "demo", "kind": "container"
+    })).await;
+    assert!(r["error"].is_null(), "alice must be able to get: {r}");
+    let items = get_resp_data_array(&r);
+    assert_eq!(items.len(), 1, "alice must see her container: {r}");
+
+    let r = http_delete(&server, &alice_jwt, serde_json::json!({
+        "namespace": "demo", "kind": "container", "name": "alice-box"
+    })).await;
+    assert!(r["error"].is_null(), "alice must be able to delete: {r}");
+
+    // ── bob (editor): get + apply, but NO delete ──────────────────────────────
+
+    let r = http_apply(&server, &bob_jwt, serde_json::json!({
+        "api_version": "v2", "kind": "container", "namespace": "demo", "name": "bob-box", "nr": 2
+    })).await;
+    assert!(r["error"].is_null(), "bob must be able to apply: {r}");
+
+    let r = http_get_objects(&server, &bob_jwt, serde_json::json!({
+        "namespace": "demo", "kind": "container"
+    })).await;
+    assert!(r["error"].is_null(), "bob must be able to get: {r}");
+    let items = get_resp_data_array(&r);
+    assert_eq!(items.len(), 1, "bob must see his container: {r}");
+
+    let r = http_delete(&server, &bob_jwt, serde_json::json!({
+        "namespace": "demo", "kind": "container", "name": "bob-box"
+    })).await;
+    assert!(!r["error"].is_null(), "bob must NOT be able to delete: {r}");
+    assert_eq!(r["error"]["type"], "forbidden", "expected forbidden, got: {r}");
+
+    // ── carol (viewer): get only, NO apply, NO delete ─────────────────────────
+
+    let r = http_apply(&server, &carol_jwt, serde_json::json!({
+        "api_version": "v2", "kind": "container", "namespace": "demo", "name": "carol-box", "nr": 3
+    })).await;
+    assert!(!r["error"].is_null(), "carol must NOT be able to apply: {r}");
+    assert_eq!(r["error"]["type"], "forbidden", "expected forbidden, got: {r}");
+
+    let r = http_get_objects(&server, &carol_jwt, serde_json::json!({
+        "namespace": "demo", "kind": "container"
+    })).await;
+    assert!(r["error"].is_null(), "carol must be able to get: {r}");
+    // bob's container exists; carol can see it
+    let items = get_resp_data_array(&r);
+    assert!(!items.is_empty(), "carol must see at least one container: {r}");
+
+    let r = http_delete(&server, &carol_jwt, serde_json::json!({
+        "namespace": "demo", "kind": "container", "name": "bob-box"
+    })).await;
+    assert!(!r["error"].is_null(), "carol must NOT be able to delete: {r}");
+    assert_eq!(r["error"]["type"], "forbidden", "expected forbidden, got: {r}");
 
     Ok(())
 }

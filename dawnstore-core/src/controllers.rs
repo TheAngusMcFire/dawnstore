@@ -9,7 +9,8 @@ use axum::{
 };
 use dawnstore_lib::*;
 
-use crate::abstractions::DawnstoreBackend;
+use crate::abstractions::{DawnstoreBackend, NewDawnStoreBackend};
+use crate::cache::DawnstoreCache;
 use crate::error::DawnStoreError;
 use crate::rbac::authz_service;
 use crate::rbac::cache::{RbacCache, Verb};
@@ -19,6 +20,7 @@ use crate::rbac::constants::{
 };
 use crate::rbac::helpers::object_string_id;
 use crate::rbac::middleware::Claims;
+use crate::{handlers::apply, handlers::delete as delete_handler, handlers::get as get_handler};
 
 pub fn get_dawnstore_default_routes<B>(backend: Arc<B>, rbac_cache: Arc<RbacCache>) -> Router
 where
@@ -467,4 +469,131 @@ where
 // Keep the auth_err helper available for the JWT middleware to call if needed.
 pub fn unauthorized(message: impl Into<String>) -> Response {
     auth_err(StatusCode::UNAUTHORIZED, message)
+}
+
+// ── New controller (NewDawnStoreBackend + DawnstoreCache) ─────────────────────
+
+struct NewApiState<B> {
+    backend: Arc<B>,
+    cache: Arc<DawnstoreCache>,
+}
+
+impl<B> Clone for NewApiState<B> {
+    fn clone(&self) -> Self {
+        Self { backend: Arc::clone(&self.backend), cache: Arc::clone(&self.cache) }
+    }
+}
+
+pub fn get_dawnstore_new_routes<B>(backend: Arc<B>, cache: Arc<DawnstoreCache>) -> Router
+where
+    B: NewDawnStoreBackend + 'static,
+{
+    Router::new()
+        .route("/apply", post(new_apply::<B>))
+        .route("/get-objects", post(new_get_objects::<B>))
+        .route("/get-resource-definitions", post(new_get_resource_definitions::<B>))
+        .route("/delete-object", delete(new_delete_object::<B>))
+        .with_state(NewApiState { backend, cache })
+}
+
+/// Check that no `Namespace` objects are being applied outside the system namespace.
+async fn check_namespace_restriction_cached(
+    cache: &DawnstoreCache,
+    value: &serde_json::Value,
+) -> Result<(), DawnStoreError> {
+    let objects: Vec<&serde_json::Value> = if let Some(arr) = value.as_array() {
+        arr.iter().collect()
+    } else if value.get("kind").and_then(|k| k.as_str()) == Some("list") {
+        value
+            .get("list")
+            .and_then(|l| l.as_array())
+            .map(|a| a.iter().collect())
+            .unwrap_or_default()
+    } else {
+        vec![value]
+    };
+
+    for obj in objects {
+        let kind = obj.get("kind").and_then(|k| k.as_str()).unwrap_or("");
+        if cache.resolve_kind(kind).await.as_deref() == Some(KIND_NAMESPACE) {
+            let ns = obj.get("namespace").and_then(|n| n.as_str()).unwrap_or("default");
+            if ns != SYSTEM_NAMESPACE {
+                return Err(DawnStoreError::NamespaceCanOnlyBeCreatedInSystemNamespace(
+                    ns.to_string(),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn new_apply<B>(
+    State(state): State<NewApiState<B>>,
+    claims_ext: Option<Extension<Claims>>,
+    Json(obj): Json<serde_json::Value>,
+) -> Response
+where
+    B: NewDawnStoreBackend + 'static,
+{
+    if let Err(e) = check_namespace_restriction_cached(&*state.cache, &obj).await {
+        return api_err(e);
+    }
+    let caller = claims_ext.map(|e| e.0);
+    match apply::apply(&*state.backend, &*state.cache, caller.as_ref(), obj).await {
+        Ok(applied) => ok(applied),
+        Err(e) => api_err(e),
+    }
+}
+
+async fn new_get_objects<B>(
+    State(state): State<NewApiState<B>>,
+    claims_ext: Option<Extension<Claims>>,
+    Json(mut filter): Json<GetObjectsFilter>,
+) -> Response
+where
+    B: NewDawnStoreBackend + 'static,
+{
+    // Translate namespace=default (or absent) to system for Namespace kind queries.
+    if let Some(k) = &filter.kind.clone() {
+        if let Some(resolved) = state.cache.resolve_kind(k).await {
+            if resolved == KIND_NAMESPACE
+                && matches!(filter.namespace.as_deref(), None | Some("default"))
+            {
+                filter.namespace = Some(SYSTEM_NAMESPACE.to_string());
+            }
+        }
+    }
+    let caller = claims_ext.map(|e| e.0);
+    match get_handler::get(&*state.backend, &*state.cache, caller.as_ref(), filter).await {
+        Ok(x) => ok(x),
+        Err(e) => api_err(e),
+    }
+}
+
+async fn new_delete_object<B>(
+    State(state): State<NewApiState<B>>,
+    claims_ext: Option<Extension<Claims>>,
+    Json(query): Json<DeleteObject>,
+) -> Response
+where
+    B: NewDawnStoreBackend + 'static,
+{
+    let caller = claims_ext.map(|e| e.0);
+    match delete_handler::delete(&*state.backend, &*state.cache, caller.as_ref(), query).await {
+        Ok(()) => ok(true),
+        Err(e) => api_err(e),
+    }
+}
+
+async fn new_get_resource_definitions<B>(
+    State(state): State<NewApiState<B>>,
+    Json(_query): Json<GetResourceDefinitionFilter>,
+) -> Response
+where
+    B: NewDawnStoreBackend + 'static,
+{
+    match state.backend.get_resource_definitions().await {
+        Ok(x) => ok(x),
+        Err(e) => api_err(e),
+    }
 }

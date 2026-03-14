@@ -131,6 +131,13 @@ mod tests {
                 .collect();
             async move { Ok(results) }
         }
+
+        fn get_resource_definitions(
+            &self,
+        ) -> impl Future<Output = Result<Vec<dawnstore_lib::ResourceDefinition>, DawnStoreError>> + Send
+        {
+            async move { Ok(vec![]) }
+        }
     }
 
     // ── Test helpers ──────────────────────────────────────────────────────────

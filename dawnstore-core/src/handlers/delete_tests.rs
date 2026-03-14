@@ -106,6 +106,13 @@ mod tests {
             self.objects.lock().unwrap().remove(&key);
             async move { Ok(()) }
         }
+
+        fn get_resource_definitions(
+            &self,
+        ) -> impl Future<Output = Result<Vec<dawnstore_lib::ResourceDefinition>, DawnStoreError>> + Send
+        {
+            async move { Ok(vec![]) }
+        }
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────

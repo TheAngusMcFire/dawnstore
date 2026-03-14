@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use dawnstore_lib::{ListOfObjects, ObjectAny, ReturnObject};
@@ -9,7 +9,11 @@ use crate::abstractions::{
 };
 use crate::cache::DawnstoreCache;
 use crate::error::DawnStoreError;
+use crate::rbac::authz_service::is_superadmin;
 use crate::rbac::cache::{EffectivePermissions, GrantedScope, Verb};
+use crate::rbac::constants::{
+    KIND_GLOBAL_ROLE, KIND_GLOBAL_ROLE_BINDING, KIND_ROLE, KIND_ROLE_BINDING,
+};
 use crate::rbac::helpers::object_string_id;
 use crate::rbac::middleware::Claims;
 
@@ -97,6 +101,9 @@ async fn check_permission<B: NewDawnStoreBackend>(
     let Some(caller) = caller else {
         return Ok(()); // unauthenticated / superadmin path: skip all checks
     };
+    if is_superadmin(caller) {
+        return Ok(()); // superadmin bypasses all permission checks
+    }
 
     // Fast path: check the in-memory cache.
     if let Some(perms) = cache.get_permissions(&caller.namespace, &caller.sub) {
@@ -330,6 +337,21 @@ async fn walk_foreign_key_graph<B: NewDawnStoreBackend>(
     caller: Option<&Claims>,
     seed_objects: &[ObjectAny],
 ) -> Result<Vec<ObjectRelation>, DawnStoreError> {
+    // Build an index of all objects in this batch by string ID so that FK
+    // targets within the same batch are treated as already-existing without
+    // requiring a database round-trip that would fail (they haven't been
+    // upserted yet when the FK walk runs).
+    let batch_index: HashMap<String, serde_json::Value> = seed_objects
+        .iter()
+        .filter_map(|obj| {
+            let ns = obj.namespace.as_deref().unwrap_or("default");
+            let kind = obj.kind.as_deref()?;
+            let sid = object_string_id(ns, kind, &obj.name);
+            let val = serde_json::to_value(obj).ok()?;
+            Some((sid, val))
+        })
+        .collect();
+
     // Use a Vec as a work stack (DFS). Serialise ObjectAny to serde_json::Value
     // to avoid needing Clone on the non-Clone ObjectAny type.
     let mut stack: Vec<serde_json::Value> = seed_objects
@@ -388,25 +410,32 @@ async fn walk_foreign_key_graph<B: NewDawnStoreBackend>(
                 )
                 .await?;
 
-                // Fetch the target object from the backend.
-                let target = backend.get_object(target_ns, target_kind, target_name).await?;
+                // Fetch the target: first check the current batch (objects being
+                // applied together may reference each other), then the database.
+                let target_raw: Option<serde_json::Value> =
+                    if let Some(v) = batch_index.get(&target_id) {
+                        Some(v.clone())
+                    } else {
+                        backend
+                            .get_object(target_ns, target_kind, target_name)
+                            .await?
+                            .map(|o| {
+                                serde_json::to_value(&o).expect("ReturnObject always serializes")
+                            })
+                    };
 
-                match target {
+                match target_raw {
                     None => {
-                        // Missing target is only an error for required FK types.
-                        if matches!(
-                            constraint.ty,
-                            ForeignKeyType::One | ForeignKeyType::OneOrMany
-                        ) {
-                            return Err(DawnStoreError::ObjectValidationForeignKeyNotFound {
-                                api_version: constraint.api_version.clone(),
-                                kind: constraint.kind.clone(),
-                                name: obj.name.clone(),
-                                value: target_id,
-                            });
-                        }
+                        // A specified FK value must point to an existing object or
+                        // another object in the same batch being applied.
+                        return Err(DawnStoreError::ObjectValidationForeignKeyNotFound {
+                            api_version: constraint.api_version.clone(),
+                            kind: constraint.kind.clone(),
+                            name: obj.name.clone(),
+                            value: target_id,
+                        });
                     }
-                    Some(target_obj) => {
+                    Some(target_val) => {
                         // Record the FK relation edge.
                         relations.push(ObjectRelation {
                             object_string_id: string_id.clone(),
@@ -417,9 +446,7 @@ async fn walk_foreign_key_graph<B: NewDawnStoreBackend>(
                         // Push the target onto the stack for its own FK constraints
                         // to be walked, enabling arbitrary-depth nesting.
                         if !visited.contains(&target_id) {
-                            let target_raw = serde_json::to_value(&target_obj)
-                                .expect("ReturnObject always serializes");
-                            stack.push(target_raw);
+                            stack.push(target_val);
                         }
                     }
                 }
@@ -466,5 +493,18 @@ pub async fn apply<B: NewDawnStoreBackend>(
     let relations = walk_foreign_key_graph(backend, cache, caller, &objects).await?;
 
     // Step 6: upsert all objects and reconcile the relations table in one transaction.
-    backend.upsert_objects(objects, relations).await
+    let applied = backend.upsert_objects(objects, relations).await?;
+
+    // Step 7: invalidate the RBAC permission cache for any applied RBAC resources so
+    // that downstream Get / Apply / Delete checks reflect the change immediately.
+    for obj in &applied {
+        if matches!(
+            obj.kind.as_str(),
+            KIND_ROLE | KIND_GLOBAL_ROLE | KIND_ROLE_BINDING | KIND_GLOBAL_ROLE_BINDING
+        ) {
+            cache.invalidate_permissions(&object_string_id(&obj.namespace, &obj.kind, &obj.name));
+        }
+    }
+
+    Ok(applied)
 }
