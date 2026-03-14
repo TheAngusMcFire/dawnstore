@@ -89,6 +89,14 @@ pub trait DawnstoreBackend: Send + Sync {
         schemas: &[SchemaDefinition],
     ) -> impl Future<Output = Result<(), DawnStoreError>> + Send;
 
+    /// Type-safe apply: serializes `Object<T>` and delegates to `apply_raw`.
+    fn apply<T: serde::Serialize + Send>(
+        &self,
+        obj: Object<T>,
+    ) -> impl Future<Output = Result<Vec<ReturnObject<serde_json::Value>>, DawnStoreError>> + Send {
+        async move { self.apply_raw(serde_json::to_value(obj)?).await }
+    }
+
     fn apply_raw(
         &self,
         data: serde_json::Value,

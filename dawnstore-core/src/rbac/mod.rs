@@ -1,7 +1,7 @@
 pub mod models;
 
 use models::*;
-use crate::abstractions::{DawnstoreBackend, ForeignKey, ForeignKeyType, SchemaDefinition};
+use crate::abstractions::{DawnstoreBackend, ForeignKey, ForeignKeyType, Object, SchemaDefinition};
 use crate::error::DawnStoreError;
 
 pub fn schemas() -> Vec<SchemaDefinition> {
@@ -43,6 +43,25 @@ pub fn schemas() -> Vec<SchemaDefinition> {
     ]
 }
 
+async fn seed_superadmin<B: DawnstoreBackend>(backend: &B) -> Result<(), DawnStoreError> {
+    backend
+        .apply(Object {
+            api_version: Some("v1".to_string()),
+            kind: Some("serviceaccount".to_string()),
+            namespace: Some("system".to_string()),
+            name: "superadmin".to_string(),
+            spec: ServiceAccount {},
+            id: None,
+            created_at: None,
+            updated_at: None,
+            annotations: None,
+            labels: None,
+        })
+        .await?;
+    Ok(())
+}
+
 pub async fn init<B: DawnstoreBackend>(backend: &B) -> Result<(), DawnStoreError> {
-    backend.seed_schema(&schemas()).await
+    backend.seed_schema(&schemas()).await?;
+    seed_superadmin(backend).await
 }
