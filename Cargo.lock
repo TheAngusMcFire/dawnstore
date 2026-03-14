@@ -551,6 +551,7 @@ name = "dawnstore-api"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "base64",
  "color-eyre",
  "dawnstore-core",
  "dawnstore-lib",
@@ -641,6 +642,7 @@ name = "dawnstore-testing"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "chrono",
  "dawnstore-client-lib",
  "dawnstore-core",
  "dawnstore-lib",
@@ -650,6 +652,7 @@ dependencies = [
  "serde_json",
  "sqlx",
  "tokio",
+ "uuid",
 ]
 
 [[package]]

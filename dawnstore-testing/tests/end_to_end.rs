@@ -420,3 +420,397 @@ async fn foreign_key_updated_on_reapply(pool: PgPool) -> sqlx::Result<()> {
 
     Ok(())
 }
+
+// ── RBAC ─────────────────────────────────────────────────────────────────────
+//
+// Tests for rbac::init (seeding), rbac::bootstrap, and /rbac/issue-token.
+// Seeding / bootstrap tests run directly against the backend; HTTP-layer tests
+// use a full server with JWT middleware.
+
+use dawnstore_core::abstractions::DawnstoreBackend;
+use dawnstore_core::rbac::jwt_service;
+
+#[allow(dead_code)]
+struct RbacTestServer {
+    api: Api,
+    bootstrap_token: String,
+    public_key_pem: Vec<u8>,
+    private_key_pem: Vec<u8>,
+}
+
+async fn spawn_rbac_server(pool: PgPool) -> RbacTestServer {
+    let keypair = jwt_service::generate_keypair().unwrap();
+    let backend = PostgresBackend::new(pool);
+
+    dawnstore_core::rbac::init(&backend).await.unwrap();
+
+    let bootstrap_token =
+        dawnstore_core::rbac::bootstrap(&backend, &keypair.private_key_pem)
+            .await
+            .unwrap()
+            .expect("first startup must return a bootstrap token");
+
+    let backend = Arc::new(backend);
+    let dawnstore_routes = get_dawnstore_default_routes(Arc::clone(&backend));
+    let rbac_routes = dawnstore_core::rbac::get_rbac_routes(
+        Arc::clone(&backend),
+        keypair.private_key_pem.clone(),
+    );
+    let app = dawnstore_core::rbac::with_jwt_auth(
+        Router::new().merge(dawnstore_routes).merge(rbac_routes),
+        keypair.public_key_pem.clone(),
+    );
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+    RbacTestServer {
+        api: Api::new(base_url),
+        bootstrap_token,
+        public_key_pem: keypair.public_key_pem,
+        private_key_pem: keypair.private_key_pem,
+    }
+}
+
+// ── Unit: authz_service ───────────────────────────────────────────────────────
+
+#[test]
+fn authz_is_superadmin_accepts_only_system_superadmin() {
+    use dawnstore_core::rbac::authz_service::is_superadmin;
+    use dawnstore_core::rbac::middleware::Claims;
+
+    let yes = Claims {
+        sub: "superadmin".into(),
+        namespace: "system".into(),
+        token_name: "bootstrap".into(),
+        token_id: uuid::Uuid::new_v4(),
+        exp: u64::MAX,
+    };
+    assert!(is_superadmin(&yes));
+
+    for (sub, ns) in [("superadmin", "other"), ("other", "system"), ("other", "other")] {
+        let no = Claims {
+            sub: sub.into(),
+            namespace: ns.into(),
+            token_name: "t".into(),
+            token_id: uuid::Uuid::new_v4(),
+            exp: u64::MAX,
+        };
+        assert!(!is_superadmin(&no), "should not be superadmin: {sub}@{ns}");
+    }
+}
+
+// ── Seeding ───────────────────────────────────────────────────────────────────
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn rbac_init_seeds_system_namespace(pool: PgPool) -> sqlx::Result<()> {
+    let backend = PostgresBackend::new(pool);
+    dawnstore_core::rbac::init(&backend).await.unwrap();
+
+    let objects = DawnstoreBackend::get(&backend, &GetObjectsFilter {
+            namespace: Some("system".into()),
+            kind: Some("namespace".into()),
+            name: Some("system".into()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(objects.len(), 1);
+    assert_eq!(objects[0].name, "system");
+    assert_eq!(objects[0].namespace, "system");
+    assert_eq!(objects[0].kind, "namespace");
+
+    Ok(())
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn rbac_init_seeds_superadmin(pool: PgPool) -> sqlx::Result<()> {
+    let backend = PostgresBackend::new(pool);
+    dawnstore_core::rbac::init(&backend).await.unwrap();
+
+    let objects = DawnstoreBackend::get(&backend, &GetObjectsFilter {
+            namespace: Some("system".into()),
+            kind: Some("serviceaccount".into()),
+            name: Some("superadmin".into()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(objects.len(), 1);
+    assert_eq!(objects[0].name, "superadmin");
+    assert_eq!(objects[0].namespace, "system");
+
+    Ok(())
+}
+
+// ── Bootstrap ─────────────────────────────────────────────────────────────────
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn bootstrap_creates_token_on_first_startup(pool: PgPool) -> sqlx::Result<()> {
+    let keypair = jwt_service::generate_keypair().unwrap();
+    let backend = PostgresBackend::new(pool);
+    dawnstore_core::rbac::init(&backend).await.unwrap();
+
+    let token = dawnstore_core::rbac::bootstrap(&backend, &keypair.private_key_pem)
+        .await
+        .unwrap();
+
+    assert!(token.is_some(), "first startup should produce a token");
+
+    // The returned JWT must be valid and carry superadmin claims.
+    let jwt = token.unwrap();
+    let claims = jwt_service::validate_token(&jwt, &keypair.public_key_pem).unwrap();
+    assert_eq!(claims.sub, "superadmin");
+    assert_eq!(claims.namespace, "system");
+    assert_eq!(claims.token_name, "bootstrap");
+
+    Ok(())
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn bootstrap_is_noop_on_second_call(pool: PgPool) -> sqlx::Result<()> {
+    let keypair = jwt_service::generate_keypair().unwrap();
+    let backend = PostgresBackend::new(pool);
+    dawnstore_core::rbac::init(&backend).await.unwrap();
+
+    let first = dawnstore_core::rbac::bootstrap(&backend, &keypair.private_key_pem)
+        .await
+        .unwrap();
+    assert!(first.is_some());
+
+    let second = dawnstore_core::rbac::bootstrap(&backend, &keypair.private_key_pem)
+        .await
+        .unwrap();
+    assert!(second.is_none(), "second call must be a no-op");
+
+    Ok(())
+}
+
+// ── HTTP: /rbac/issue-token ───────────────────────────────────────────────────
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn issue_token_rejects_unauthenticated(pool: PgPool) -> sqlx::Result<()> {
+    let server = spawn_rbac_server(pool).await;
+
+    let resp = server
+        .api
+        .get_client()
+        .post(format!("{}/rbac/issue-token", server.api.get_base_url()))
+        // no Authorization header
+        .json(&serde_json::json!({
+            "namespace": "system",
+            "service_account": "superadmin",
+            "token_name": "test-token"
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status().as_u16(), 401);
+
+    Ok(())
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn issue_token_superadmin_can_issue(pool: PgPool) -> sqlx::Result<()> {
+    let server = spawn_rbac_server(pool).await;
+
+    // Issue a new token for the superadmin itself (already seeded, no extra setup needed).
+    let resp = server
+        .api
+        .get_client()
+        .post(format!("{}/rbac/issue-token", server.api.get_base_url()))
+        .bearer_auth(&server.bootstrap_token)
+        .json(&serde_json::json!({
+            "namespace": "system",
+            "service_account": "superadmin",
+            "token_name": "integration-test-token"
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert!(resp.status().is_success(), "status: {}", resp.status());
+
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let jwt = body["token"].as_str().expect("response must have a token field");
+    let token_id_str = body["token_id"].as_str().expect("response must have a token_id field");
+    assert!(!jwt.is_empty());
+    assert!(!token_id_str.is_empty());
+
+    // The issued JWT must validate correctly with the server's public key.
+    let claims = jwt_service::validate_token(jwt, &server.public_key_pem).unwrap();
+    assert_eq!(claims.sub, "superadmin");
+    assert_eq!(claims.namespace, "system");
+    assert_eq!(claims.token_name, "integration-test-token");
+    assert_eq!(claims.token_id.to_string(), token_id_str);
+
+    Ok(())
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn issue_token_non_superadmin_is_forbidden(pool: PgPool) -> sqlx::Result<()> {
+    let server = spawn_rbac_server(pool).await;
+
+    // Create a regular service account in a separate namespace.
+    let apply_resp = server
+        .api
+        .get_client()
+        .post(format!("{}/apply", server.api.get_base_url()))
+        .bearer_auth(&server.bootstrap_token)
+        .header("content-type", "application/json")
+        .body(
+            serde_json::json!({
+                "api_version": "v1",
+                "kind": "serviceaccount",
+                "namespace": "test-ns",
+                "name": "regular"
+            })
+            .to_string(),
+        )
+        .send()
+        .await
+        .unwrap();
+    assert!(apply_resp.status().is_success(), "failed to create service account");
+
+    // Superadmin issues a token for the regular service account.
+    let issue_resp = server
+        .api
+        .get_client()
+        .post(format!("{}/rbac/issue-token", server.api.get_base_url()))
+        .bearer_auth(&server.bootstrap_token)
+        .json(&serde_json::json!({
+            "namespace": "test-ns",
+            "service_account": "regular",
+            "token_name": "regular-token"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(issue_resp.status().is_success(), "superadmin should be able to issue token");
+
+    let regular_jwt = issue_resp.json::<serde_json::Value>().await.unwrap();
+    let regular_jwt = regular_jwt["token"].as_str().unwrap().to_string();
+
+    // The regular token must itself be cryptographically valid.
+    jwt_service::validate_token(&regular_jwt, &server.public_key_pem)
+        .expect("issued token must be valid");
+
+    // Using the regular token to issue yet another token must be rejected with 403.
+    let forbidden_resp = server
+        .api
+        .get_client()
+        .post(format!("{}/rbac/issue-token", server.api.get_base_url()))
+        .bearer_auth(&regular_jwt)
+        .json(&serde_json::json!({
+            "namespace": "test-ns",
+            "service_account": "regular",
+            "token_name": "another-token"
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(forbidden_resp.status().as_u16(), 403, "non-superadmin must receive 403");
+
+    Ok(())
+}
+
+// ── JWT authentication negative cases ────────────────────────────────────────
+
+/// Helper: POST to any protected endpoint with the given raw Authorization value.
+async fn get_objects_with_auth(server: &RbacTestServer, auth_header: &str) -> u16 {
+    server
+        .api
+        .get_client()
+        .post(format!("{}/get-objects", server.api.get_base_url()))
+        .header("Authorization", auth_header)
+        .json(&serde_json::json!({}))
+        .send()
+        .await
+        .unwrap()
+        .status()
+        .as_u16()
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn auth_rejects_malformed_token(pool: PgPool) -> sqlx::Result<()> {
+    let server = spawn_rbac_server(pool).await;
+
+    assert_eq!(get_objects_with_auth(&server, "Bearer not.a.jwt").await, 401);
+    assert_eq!(get_objects_with_auth(&server, "Bearer ").await, 401);
+    assert_eq!(get_objects_with_auth(&server, "Bearer eyJhbGciOiJFUzM4NCJ9.garbage.sig").await, 401);
+
+    Ok(())
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn auth_rejects_token_signed_with_wrong_key(pool: PgPool) -> sqlx::Result<()> {
+    let server = spawn_rbac_server(pool).await;
+
+    // Sign a structurally valid token with a *different* keypair.
+    let other_keypair = jwt_service::generate_keypair().unwrap();
+    let forged = jwt_service::create_token(
+        "superadmin",
+        "system",
+        "forged",
+        uuid::Uuid::new_v4(),
+        chrono::Utc::now() + chrono::Duration::hours(1),
+        &other_keypair.private_key_pem,
+    )
+    .unwrap();
+
+    assert_eq!(
+        get_objects_with_auth(&server, &format!("Bearer {forged}")).await,
+        401,
+        "token signed by wrong key must be rejected"
+    );
+
+    Ok(())
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn auth_rejects_expired_token(pool: PgPool) -> sqlx::Result<()> {
+    let server = spawn_rbac_server(pool).await;
+
+    // Create a token that expired 1 hour ago.
+    let expired = jwt_service::create_token(
+        "superadmin",
+        "system",
+        "expired",
+        uuid::Uuid::new_v4(),
+        chrono::Utc::now() - chrono::Duration::hours(1),
+        &server.private_key_pem,
+    )
+    .unwrap();
+
+    assert_eq!(
+        get_objects_with_auth(&server, &format!("Bearer {expired}")).await,
+        401,
+        "expired token must be rejected"
+    );
+
+    Ok(())
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn auth_rejects_missing_bearer_prefix(pool: PgPool) -> sqlx::Result<()> {
+    let server = spawn_rbac_server(pool).await;
+
+    // Token is valid but header uses wrong scheme.
+    assert_eq!(
+        get_objects_with_auth(&server, &format!("Token {}", server.bootstrap_token)).await,
+        401,
+        "non-Bearer scheme must be rejected"
+    );
+    assert_eq!(
+        get_objects_with_auth(&server, &server.bootstrap_token).await,
+        401,
+        "raw token without scheme must be rejected"
+    );
+
+    Ok(())
+}

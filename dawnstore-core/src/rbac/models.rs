@@ -1,6 +1,17 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+// ── Namespace ─────────────────────────────────────────────────────────────────
+
+/// A namespace is a grouping of objects. The spec is intentionally empty;
+/// the name in the object metadata is the namespace identifier.
+///
+/// Namespace objects are stored in the `system` namespace.
+/// The `system` namespace itself is seeded during [`crate::rbac::init`].
+#[derive(Debug, Clone, JsonSchema, Serialize, Deserialize)]
+#[schemars(deny_unknown_fields)]
+pub struct Namespace {}
+
 // ── PolicyRule ────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, JsonSchema, Serialize, Deserialize)]

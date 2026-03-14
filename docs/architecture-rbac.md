@@ -21,6 +21,18 @@ All models are stored as dawnstore objects, making the system backend-agnostic.
 
 ## Models
 
+### namespace (aliases: `namespaces`, `ns`)
+Represents a logical grouping of objects. The spec is empty; the object `name` is the namespace identifier.
+
+Namespace objects themselves are stored in the `system` namespace.
+The `system` namespace is the reserved meta-namespace for RBAC and system-level resources.
+During `rbac::init` the following objects are seeded (idempotent):
+
+1. `system/namespace/system` — the system namespace record
+2. `system/serviceaccount/superadmin` — the built-in superadmin identity
+
+---
+
 ### serviceaccount (aliases: `serviceaccounts`, `sa`)
 Represents an identity (a service or user). The spec is empty; identity is fully expressed by `name` and `namespace` from the dawnstore object metadata.
 
@@ -85,6 +97,60 @@ Binds a `globalrole` to one or more `serviceaccount`s across all namespaces.
 |------------|---------------|--------------------------------------------------------------|
 | `role`     | `String`      | FK → `globalrole`                                            |
 | `subjects` | `Vec<String>` | FK → `serviceaccount`; each value is `namespace/serviceaccount/name` |
+
+---
+
+## Token Issuance
+
+**`POST /rbac/issue-token`** — requires superadmin JWT.
+
+Request:
+```json
+{
+  "namespace": "myns",
+  "service_account": "mysa",
+  "token_name": "my-token",
+  "expires_at": "2027-01-01T00:00:00Z"   // optional; defaults to 1 year
+}
+```
+
+Response:
+```json
+{
+  "token": "<signed JWT>",
+  "token_id": "<uuid of the serviceaccounttoken object>",
+  "expires_at": "2027-01-01T00:00:00Z"
+}
+```
+
+The handler creates a `serviceaccounttoken` object in the backend (obtaining its UUID), then signs a JWT with that UUID as `token_id`. The private signing key is never stored — it is provided at server startup via `JWT_PRIVATE_KEY_B64`.
+
+### Bootstrap
+
+On the **first** startup the server detects that no `system/serviceaccounttoken/bootstrap` object exists, creates it (1-year expiry), signs a JWT, and prints it to stdout:
+
+```
+================================================================
+BOOTSTRAP TOKEN (printed once — store it securely):
+eyJ...
+================================================================
+```
+
+On all subsequent startups the token object already exists and nothing is printed. After bootstrapping, rotate or revoke the token via the normal `POST /rbac/issue-token` endpoint using the bootstrap token for authentication.
+
+### Key management
+
+Generate a P-384 keypair:
+```
+dawnstore-api --generate-keys
+# prints:
+# JWT_PRIVATE_KEY_B64=<base64>
+# JWT_PUBLIC_KEY_B64=<base64>
+```
+
+Provide keys to the server via environment variables:
+- `JWT_PRIVATE_KEY_B64` — base64-encoded PKCS#8 PEM private key (needed to issue tokens)
+- `JWT_PUBLIC_KEY_B64` — base64-encoded PEM public key (needed to validate tokens)
 
 ---
 

@@ -19,6 +19,7 @@ jsonschema = { version = "0.38" }
 jsonwebtoken = { version = "9" }
 p384 = { version = "0.13", features = ["pkcs8", "pem"] }
 rand_core = { version = "0.6", features = ["getrandom"] }
+base64 = { version = "0.22" }
 sqlx = { version = "0.8", features = [
   "postgres",
   "runtime-tokio",
