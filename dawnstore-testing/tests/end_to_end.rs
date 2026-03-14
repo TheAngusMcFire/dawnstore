@@ -352,11 +352,11 @@ async fn namespace_created_outside_system_is_rejected(pool: PgPool) -> sqlx::Res
         .await
         .unwrap();
 
-    assert_eq!(
-        resp.status().as_u16(),
-        400,
-        "namespace in non-system namespace must be rejected"
-    );
+    // Controller now always returns HTTP 200; errors are in the envelope body.
+    assert!(resp.status().is_success());
+    let body: dawnstore_lib::DawnStoreResponse<serde_json::Value> = resp.json().await.unwrap();
+    assert!(body.error.is_some(), "namespace in non-system namespace must produce an error");
+    assert!(body.data.is_none());
 
     Ok(())
 }
@@ -378,7 +378,9 @@ async fn namespace_query_translates_default_to_system(pool: PgPool) -> sqlx::Res
         .unwrap();
 
     assert!(resp.status().is_success());
-    let objects: Vec<serde_json::Value> = resp.json().await.unwrap();
+    let body: dawnstore_lib::DawnStoreResponse<Vec<serde_json::Value>> =
+        resp.json().await.unwrap();
+    let objects = body.data.expect("expected data in response");
     assert_eq!(objects.len(), 1, "should find the system namespace");
     assert_eq!(objects[0]["name"], "system");
     assert_eq!(objects[0]["namespace"], "system");
@@ -395,7 +397,9 @@ async fn namespace_query_translates_default_to_system(pool: PgPool) -> sqlx::Res
         .unwrap();
 
     assert!(resp2.status().is_success());
-    let objects2: Vec<serde_json::Value> = resp2.json().await.unwrap();
+    let body2: dawnstore_lib::DawnStoreResponse<Vec<serde_json::Value>> =
+        resp2.json().await.unwrap();
+    let objects2 = body2.data.expect("expected data in response");
     assert_eq!(objects2.len(), 1);
     assert_eq!(objects2[0]["name"], "system");
 

@@ -4,6 +4,39 @@ use chrono::{DateTime, Utc};
 use schemars::JsonSchema;
 use uuid::Uuid;
 
+// ── API response envelope ─────────────────────────────────────────────────────
+
+/// Client-safe error variants returned inside [`DawnStoreResponse`].
+/// Internal details (DB errors, stack traces) are never exposed.
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum DawnStoreApiError {
+    UnknownResourceKind { kind: String },
+    NamespaceRestriction { namespace: String },
+    SchemaNotFound { api_version: String, kind: String },
+    ValidationError { name: String, message: String },
+    ForeignKeyNotFound { value: String },
+    InvalidInput { message: String },
+    InternalError,
+}
+
+/// Uniform API envelope. HTTP status is always 200 for application-level
+/// errors; only transport/auth failures use non-200 status codes.
+#[derive(serde::Serialize, serde::Deserialize, Debug)]
+pub struct DawnStoreResponse<T> {
+    pub data: Option<T>,
+    pub error: Option<DawnStoreApiError>,
+}
+
+impl<T> DawnStoreResponse<T> {
+    pub fn ok(data: T) -> Self {
+        Self { data: Some(data), error: None }
+    }
+    pub fn err(error: DawnStoreApiError) -> Self {
+        Self { data: None, error: Some(error) }
+    }
+}
+
 #[derive(serde::Serialize, serde::Deserialize, Debug, JsonSchema)]
 pub struct ObjectOwner {
     pub api_version: String,

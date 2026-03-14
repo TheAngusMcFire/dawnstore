@@ -10,6 +10,13 @@ mod args;
 mod config;
 mod utils;
 
+/// Convert an API error to an eyre error using the Debug representation so
+/// that structured enum variants (e.g. `ServerError(UnknownResourceKind {...})`)
+/// are visible in the output instead of the flattened Display string.
+fn api_err(e: impl std::fmt::Debug) -> color_eyre::eyre::Error {
+    color_eyre::eyre::eyre!("{e:?}")
+}
+
 #[tokio::main]
 async fn main() -> color_eyre::Result<()> {
     let args = args::Cli::parse();
@@ -27,7 +34,7 @@ async fn main() -> color_eyre::Result<()> {
         args::Commands::Get { resource }
             if resource == "resource-definitions" || resource == "rd" =>
         {
-            let rd = api.get_resource_definitions(&Default::default()).await?;
+            let rd = api.get_resource_definitions(&Default::default()).await.map_err(api_err)?;
             println!("{:20} {:20} {:20}", "Kind:", "ApiVersion:", "Aliases:");
             println!("------------------------------------------------------");
             for r in rd {
@@ -58,7 +65,7 @@ async fn main() -> color_eyre::Result<()> {
                 fill_child_foreign_keys: false,
                 fill_parent_foreign_keys: false,
             };
-            let rd = api.get_objects(&filter).await?;
+            let rd = api.get_objects(&filter).await.map_err(api_err)?;
             println!(
                 "{:20} {:20} {:20} {:10} {:20}",
                 "Namespace:", "Name:", "Kind:", "ApiVersion:", "Created:"
@@ -91,14 +98,15 @@ async fn main() -> color_eyre::Result<()> {
                 fill_child_foreign_keys: true,
                 fill_parent_foreign_keys: true,
             };
-            let mut rd = api.get_objects(&filter).await?;
+            let mut rd = api.get_objects(&filter).await.map_err(api_err)?;
             let Some(obj) = rd.pop() else {
                 bail!("object not found");
             };
             let schema_filter = Default::default();
             let Some(schema) = api
                 .get_resource_definitions(&schema_filter)
-                .await?
+                .await
+                .map_err(api_err)?
                 .into_iter()
                 .find(|x| x.api_version == obj.api_version && x.kind == obj.kind)
             else {
@@ -142,14 +150,15 @@ async fn main() -> color_eyre::Result<()> {
             };
             let value = serde_yml::from_str::<serde_json::Value>(&x)?;
             let json_file = serde_json::to_string(&value)?;
-            api.apply_str(json_file).await?;
+            api.apply_str(json_file).await.map_err(api_err)?;
         }
         args::Commands::Apply { path } => {
             let file = std::fs::read_to_string(path)?;
             let value = serde_yml::from_str::<serde_json::Value>(&file)?;
             let json_file = serde_json::to_string(&value)?;
             api.apply_str(json_file)
-                .await?
+                .await
+                .map_err(api_err)?
                 .iter()
                 .for_each(|x| println!("{}", x.name));
         }

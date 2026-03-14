@@ -29,15 +29,68 @@ struct ApiState<B> {
     backend: Arc<B>,
 }
 
-// Manual Clone so the impl doesn't gain a spurious `B: Clone` bound.
-// Arc<B> is always Clone regardless of B.
 impl<B> Clone for ApiState<B> {
     fn clone(&self) -> Self {
         Self { backend: Arc::clone(&self.backend) }
     }
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// ── Error mapping ─────────────────────────────────────────────────────────────
+
+/// Map an internal [`DawnStoreError`] to a client-safe [`DawnStoreApiError`].
+/// Database internals, stack traces, and other sensitive details are stripped.
+fn to_api_error(err: DawnStoreError) -> DawnStoreApiError {
+    match err {
+        DawnStoreError::UnknownResourceKind(kind) => DawnStoreApiError::UnknownResourceKind { kind },
+        DawnStoreError::NamespaceCanOnlyBeCreatedInSystemNamespace(namespace) => {
+            DawnStoreApiError::NamespaceRestriction { namespace }
+        }
+        DawnStoreError::NoSchemaForObjectFound { api_version, kind } => {
+            DawnStoreApiError::SchemaNotFound { api_version, kind }
+        }
+        DawnStoreError::ObjectValidationError { name, validation_error, .. } => {
+            DawnStoreApiError::ValidationError { name, message: validation_error.to_string() }
+        }
+        DawnStoreError::ObjectValidationMissingForeignKeyEntry { name, foreign_key_path, .. } => {
+            DawnStoreApiError::ValidationError {
+                name,
+                message: format!("missing required foreign key field: {foreign_key_path}"),
+            }
+        }
+        DawnStoreError::ObjectValidationWrongForeignKeyEntryFormat { name, foreign_key_path, value, .. } => {
+            DawnStoreApiError::ValidationError {
+                name,
+                message: format!("invalid foreign key format at '{foreign_key_path}': {value}"),
+            }
+        }
+        DawnStoreError::ObjectValidationWrongForeignKeyEntryKind { name, foreign_key_path, value, .. } => {
+            DawnStoreApiError::ValidationError {
+                name,
+                message: format!("wrong foreign key kind at '{foreign_key_path}': {value}"),
+            }
+        }
+        DawnStoreError::ObjectValidationForeignKeyNotFound { value, .. } => {
+            DawnStoreApiError::ForeignKeyNotFound { value }
+        }
+        DawnStoreError::ForeignKeyNotFound(value) => DawnStoreApiError::ForeignKeyNotFound { value },
+        DawnStoreError::InvalidRootInputObject
+        | DawnStoreError::InvalidInputObjectMissingKindField
+        | DawnStoreError::InvalidInputObjectMissingListFieldOfList
+        | DawnStoreError::KindMissingInObject
+        | DawnStoreError::ApiVersionMissingInObject => {
+            DawnStoreApiError::InvalidInput { message: err.to_string() }
+        }
+        DawnStoreError::DeserialisationError(e) => {
+            DawnStoreApiError::InvalidInput { message: e.to_string() }
+        }
+        // Internal errors: do not leak details to the client.
+        DawnStoreError::DatabaseError(_)
+        | DawnStoreError::InternalServerError(_)
+        | DawnStoreError::JsonSchemaValidatorCreationError(_) => DawnStoreApiError::InternalError,
+    }
+}
+
+// ── Controller pre-checks ─────────────────────────────────────────────────────
 
 /// Walk the raw apply payload (single object, array, or List wrapper) and
 /// verify that no `namespace` object is being applied outside `system`.
@@ -72,14 +125,19 @@ fn check_namespace_restriction<B: DawnstoreBackend>(
     Ok(())
 }
 
-/// Return 404 if the requested kind is not registered, 400 otherwise.
-fn error_response(err: DawnStoreError) -> Response {
-    let status = match &err {
-        DawnStoreError::UnknownResourceKind(_) => StatusCode::NOT_FOUND,
-        DawnStoreError::NamespaceCanOnlyBeCreatedInSystemNamespace(_) => StatusCode::BAD_REQUEST,
-        _ => StatusCode::BAD_REQUEST,
-    };
-    let mut resp = format!("{err}").into_response();
+// ── Response helpers ──────────────────────────────────────────────────────────
+
+fn ok<T: serde::Serialize>(data: T) -> Response {
+    Json(DawnStoreResponse::ok(data)).into_response()
+}
+
+fn api_err(err: DawnStoreError) -> Response {
+    Json(DawnStoreResponse::<()>::err(to_api_error(err))).into_response()
+}
+
+/// Return 401 for auth failures (not wrapped in the envelope).
+fn auth_err(status: StatusCode, message: impl Into<String>) -> Response {
+    let mut resp = message.into().into_response();
     *resp.status_mut() = status;
     resp
 }
@@ -94,11 +152,11 @@ where
     B: DawnstoreBackend + 'static,
 {
     if let Err(e) = check_namespace_restriction(&*state.backend, &obj) {
-        return error_response(e);
+        return api_err(e);
     }
     match state.backend.apply_raw(obj).await {
-        Ok(x) => Json(x).into_response(),
-        Err(e) => error_response(e),
+        Ok(x) => ok(x),
+        Err(e) => api_err(e),
     }
 }
 
@@ -110,12 +168,10 @@ where
     B: DawnstoreBackend + 'static,
 {
     if let Some(k) = &query.kind.clone() {
-        // Unknown kind → 404
         let resolved = match state.backend.resource_cache().resolve(k) {
             Some(r) => r,
-            None => return error_response(DawnStoreError::UnknownResourceKind(k.clone())),
+            None => return api_err(DawnStoreError::UnknownResourceKind(k.clone())),
         };
-        // Namespace objects live in the system namespace; translate default → system.
         if resolved == "namespace"
             && matches!(query.namespace.as_deref(), None | Some("default"))
         {
@@ -123,8 +179,8 @@ where
         }
     }
     match state.backend.get(&query).await {
-        Ok(x) => Json(x).into_response(),
-        Err(e) => error_response(e),
+        Ok(x) => ok(x),
+        Err(e) => api_err(e),
     }
 }
 
@@ -136,10 +192,9 @@ where
     B: DawnstoreBackend + 'static,
 {
     if let Some(k) = &query.kind.clone() {
-        // Unknown kind → 404
         let resolved = match state.backend.resource_cache().resolve(k) {
             Some(r) => r,
-            None => return error_response(DawnStoreError::UnknownResourceKind(k.clone())),
+            None => return api_err(DawnStoreError::UnknownResourceKind(k.clone())),
         };
         if resolved == "namespace"
             && matches!(query.namespace.as_deref(), None | Some("default"))
@@ -148,8 +203,8 @@ where
         }
     }
     match state.backend.get_object_infos(&query).await {
-        Ok(x) => Json(x).into_response(),
-        Err(e) => error_response(e),
+        Ok(x) => ok(x),
+        Err(e) => api_err(e),
     }
 }
 
@@ -161,8 +216,8 @@ where
     B: DawnstoreBackend + 'static,
 {
     match state.backend.get_resource_definition(&query).await {
-        Ok(x) => Json(x).into_response(),
-        Err(e) => error_response(e),
+        Ok(x) => ok(x),
+        Err(e) => api_err(e),
     }
 }
 
@@ -174,7 +229,12 @@ where
     B: DawnstoreBackend + 'static,
 {
     match state.backend.delete(&query).await {
-        Ok(x) => Json(x).into_response(),
-        Err(e) => error_response(e),
+        Ok(()) => ok(true),
+        Err(e) => api_err(e),
     }
+}
+
+// Keep the auth_err helper available for the JWT middleware to call if needed.
+pub fn unauthorized(message: impl Into<String>) -> Response {
+    auth_err(StatusCode::UNAUTHORIZED, message)
 }

@@ -4,10 +4,12 @@ use serde::{Serialize, de::DeserializeOwned};
 
 #[derive(thiserror::Error, Debug)]
 pub enum DawnstoreApiError {
-    #[error("Error from reqwest: {0}")]
+    #[error("Transport error: {0}")]
     RequestError(#[from] reqwest::Error),
-    #[error("Error from api code: {0} msg: {1}")]
-    ApiError(reqwest::StatusCode, String),
+    #[error("HTTP error {0}: {1}")]
+    HttpError(reqwest::StatusCode, String),
+    #[error("Server error: {0:?}")]
+    ServerError(DawnStoreApiError),
 }
 
 pub struct Api {
@@ -41,7 +43,6 @@ impl Api {
         &self.base_url
     }
 
-    /// Build a request, attaching a Bearer token when one is configured.
     fn request(&self, method: Method, url: String) -> RequestBuilder {
         let builder = self.client.request(method, url);
         match &self.token {
@@ -59,7 +60,7 @@ impl Api {
             .json(filter)
             .send()
             .await?;
-        to_result(resp).await
+        envelope(resp).await
     }
 
     pub async fn get_objects(
@@ -71,7 +72,7 @@ impl Api {
             .json(filter)
             .send()
             .await?;
-        to_result(resp).await
+        envelope(resp).await
     }
 
     pub async fn get_objects_typed<T: DeserializeOwned>(
@@ -83,7 +84,7 @@ impl Api {
             .json(filter)
             .send()
             .await?;
-        to_result(resp).await
+        envelope(resp).await
     }
 
     pub async fn get_object_infos(
@@ -95,7 +96,7 @@ impl Api {
             .json(filter)
             .send()
             .await?;
-        to_result(resp).await
+        envelope(resp).await
     }
 
     pub async fn apply_str(
@@ -108,7 +109,7 @@ impl Api {
             .body(content)
             .send()
             .await?;
-        to_result(resp).await
+        envelope(resp).await
     }
 
     pub async fn delete_object(&self, req: &DeleteObject) -> Result<(), DawnstoreApiError> {
@@ -117,11 +118,8 @@ impl Api {
             .json(req)
             .send()
             .await?;
-        if resp.status().is_success() {
-            Ok(())
-        } else {
-            Err(DawnstoreApiError::ApiError(resp.status(), resp.text().await?))
-        }
+        let _: serde_json::Value = envelope(resp).await?;
+        Ok(())
     }
 
     pub async fn reqwest_exchange<Treq: Serialize, Tres: DeserializeOwned>(
@@ -134,16 +132,28 @@ impl Api {
             .json(req)
             .send()
             .await?;
-        to_result(resp).await
+        envelope(resp).await
     }
 }
 
-async fn to_result<T: DeserializeOwned>(
+/// Unwrap a `DawnStoreResponse<T>` from a response.
+/// Non-200 HTTP status codes (e.g. 401 Unauthorized) are returned as
+/// [`DawnstoreApiError::HttpError`] without attempting JSON parsing.
+/// 200 responses are parsed as the envelope and the inner error (if any)
+/// is returned as [`DawnstoreApiError::ServerError`].
+async fn envelope<T: DeserializeOwned>(
     resp: reqwest::Response,
 ) -> Result<T, DawnstoreApiError> {
-    if resp.status().is_success() {
-        Ok(resp.json::<T>().await?)
-    } else {
-        Err(DawnstoreApiError::ApiError(resp.status(), resp.text().await?))
+    if !resp.status().is_success() {
+        return Err(DawnstoreApiError::HttpError(resp.status(), resp.text().await?));
+    }
+    let wrapped: DawnStoreResponse<T> = resp.json().await?;
+    match wrapped {
+        DawnStoreResponse { data: Some(data), .. } => Ok(data),
+        DawnStoreResponse { error: Some(err), .. } => Err(DawnstoreApiError::ServerError(err)),
+        _ => Err(DawnstoreApiError::HttpError(
+            reqwest::StatusCode::OK,
+            "server returned an empty response".to_string(),
+        )),
     }
 }
