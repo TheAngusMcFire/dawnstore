@@ -74,4 +74,8 @@ pub enum DawnStoreError {
         name: String,
         value: String,
     },
+    #[error("Unknown resource kind: {0}")]
+    UnknownResourceKind(String),
+    #[error("Namespace objects can only be created in the 'system' namespace, got namespace: '{0}'")]
+    NamespaceCanOnlyBeCreatedInSystemNamespace(String),
 }

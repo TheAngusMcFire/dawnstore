@@ -277,6 +277,131 @@ async fn resource_definitions_returns_seeded_schema(pool: PgPool) -> sqlx::Resul
     Ok(())
 }
 
+// ── Alias resolution ─────────────────────────────────────────────────────────
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn get_objects_by_alias(pool: PgPool) -> sqlx::Result<()> {
+    let api = spawn_server(pool).await;
+
+    api.apply_str(container("alias-box", 42)).await.unwrap();
+
+    // "containers" is a registered alias for "container"
+    let by_alias = api
+        .get_objects(&GetObjectsFilter {
+            kind: Some("containers".into()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+    let by_kind = api
+        .get_objects(&GetObjectsFilter {
+            kind: Some("container".into()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(by_alias.len(), 1);
+    assert_eq!(by_alias[0].name, "alias-box");
+    assert_eq!(by_alias[0].spec["nr"], 42);
+    assert_eq!(by_alias.len(), by_kind.len());
+    assert_eq!(by_alias[0].id, by_kind[0].id);
+
+    Ok(())
+}
+
+// ── Controller rules ─────────────────────────────────────────────────────────
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn get_objects_unknown_kind_returns_error(pool: PgPool) -> sqlx::Result<()> {
+    let api = spawn_server(pool).await;
+
+    let result = api
+        .get_objects(&GetObjectsFilter {
+            kind: Some("ghost".into()),
+            ..Default::default()
+        })
+        .await;
+
+    assert!(result.is_err(), "unknown kind should return an error");
+
+    Ok(())
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn namespace_created_outside_system_is_rejected(pool: PgPool) -> sqlx::Result<()> {
+    let server = spawn_rbac_server(pool).await;
+
+    let resp = server
+        .api
+        .get_client()
+        .post(format!("{}/apply", server.api.get_base_url()))
+        .bearer_auth(&server.bootstrap_token)
+        .header("content-type", "application/json")
+        .body(
+            serde_json::json!({
+                "api_version": "v1",
+                "kind": "namespace",
+                "namespace": "other",
+                "name": "my-namespace"
+            })
+            .to_string(),
+        )
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(
+        resp.status().as_u16(),
+        400,
+        "namespace in non-system namespace must be rejected"
+    );
+
+    Ok(())
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn namespace_query_translates_default_to_system(pool: PgPool) -> sqlx::Result<()> {
+    let server = spawn_rbac_server(pool).await;
+
+    // rbac::init seeds a `system/namespace/system` object.
+    // Querying with namespace="default" must transparently return it.
+    let resp = server
+        .api
+        .get_client()
+        .post(format!("{}/get-objects", server.api.get_base_url()))
+        .bearer_auth(&server.bootstrap_token)
+        .json(&serde_json::json!({ "kind": "namespace", "namespace": "default" }))
+        .send()
+        .await
+        .unwrap();
+
+    assert!(resp.status().is_success());
+    let objects: Vec<serde_json::Value> = resp.json().await.unwrap();
+    assert_eq!(objects.len(), 1, "should find the system namespace");
+    assert_eq!(objects[0]["name"], "system");
+    assert_eq!(objects[0]["namespace"], "system");
+
+    // Querying with no namespace should also return system namespaces.
+    let resp2 = server
+        .api
+        .get_client()
+        .post(format!("{}/get-objects", server.api.get_base_url()))
+        .bearer_auth(&server.bootstrap_token)
+        .json(&serde_json::json!({ "kind": "namespace" }))
+        .send()
+        .await
+        .unwrap();
+
+    assert!(resp2.status().is_success());
+    let objects2: Vec<serde_json::Value> = resp2.json().await.unwrap();
+    assert_eq!(objects2.len(), 1);
+    assert_eq!(objects2[0]["name"], "system");
+
+    Ok(())
+}
+
 // ── Schema validation ────────────────────────────────────────────────────────
 
 #[sqlx::test(migrator = "MIGRATOR")]

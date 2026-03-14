@@ -15,7 +15,13 @@ async fn main() -> color_eyre::Result<()> {
     let args = args::Cli::parse();
     let file = std::fs::read_to_string(&args.context_path)?;
     let context = serde_yml::from_str::<config::Context>(&file)?;
-    let api = dawnstore_client_lib::Api::new(&context.url);
+
+    // Token priority: --token / DAWNSTORE_TOKEN env var > context file token field.
+    let token = args.token.or(context.token);
+    let api = match token {
+        Some(t) => dawnstore_client_lib::Api::new_with_token(&context.url, t),
+        None => dawnstore_client_lib::Api::new(&context.url),
+    };
 
     match &args.command {
         args::Commands::Get { resource }

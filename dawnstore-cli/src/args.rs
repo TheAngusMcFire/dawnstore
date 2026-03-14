@@ -18,6 +18,12 @@ pub struct Cli {
 
     #[arg(short = 'A', long)]
     pub all_namespaces: bool,
+
+    /// Bearer token for API authentication.
+    /// Takes precedence over the token in the context file.
+    /// Can also be set via the DAWNSTORE_TOKEN environment variable.
+    #[arg(long, env = "DAWNSTORE_TOKEN")]
+    pub token: Option<String>,
 }
 
 #[derive(Subcommand, Debug)]

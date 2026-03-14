@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 use cache::CacheStore;
 use data_models::{ForeignKeyConstraint, ObjectInfo, ObjectSchema, Relation};
-use dawnstore_core::{abstractions::{DawnstoreBackend, ForeignKey}, error::DawnStoreError};
+use dawnstore_core::{abstractions::{DawnstoreBackend, ForeignKey, ResourceCache}, error::DawnStoreError};
 use dawnstore_lib::*;
 
 mod apply_impl;
@@ -17,6 +17,7 @@ mod queries;
 pub struct PostgresBackend {
     pool: Pool<Postgres>,
     cache: CacheStore,
+    resource_cache: ResourceCache,
 }
 
 // ── Postgres-specific methods ─────────────────────────────────────────────────
@@ -37,6 +38,7 @@ impl PostgresBackend {
         PostgresBackend {
             pool,
             cache: CacheStore::default(),
+            resource_cache: ResourceCache::default(),
         }
     }
 
@@ -58,7 +60,12 @@ impl PostgresBackend {
     }
 
     pub async fn warm_caches(&self) -> Result<(), DawnStoreError> {
-        self.cache.warm(&self.pool).await
+        self.cache.warm(&self.pool).await?;
+        let schemas = queries::get_all_object_schemas(&self.pool).await?;
+        for s in &schemas {
+            self.resource_cache.add(&s.kind, &s.aliases);
+        }
+        Ok(())
     }
 }
 
@@ -108,12 +115,17 @@ impl DawnstoreBackend for PostgresBackend {
             let validator = jsonschema::validator_for(&serde_json::from_str(&def.json_schema)?)?;
             self.cache.insert_schema(&def.api_version, &def.kind, validator).await;
             self.cache.insert_foreign_keys(&def.api_version, &def.kind, keys).await;
+            self.resource_cache.add(&def.kind, &def.aliases);
         }
 
         Ok(())
     }
 
-    async fn delete(&self, delete: &DeleteObject) -> Result<(), DawnStoreError> {
+    fn resource_cache(&self) -> &ResourceCache {
+        &self.resource_cache
+    }
+
+    async fn delete_impl(&self, delete: &DeleteObject) -> Result<(), DawnStoreError> {
         let mut con = self.pool.acquire().await?;
         let ns = match &delete.namespace {
             Some(x) if x == "default" => None,
@@ -125,7 +137,7 @@ impl DawnstoreBackend for PostgresBackend {
         Ok(())
     }
 
-    async fn get(
+    async fn get_impl(
         &self,
         filter: &GetObjectsFilter,
     ) -> Result<Vec<ReturnObject<serde_json::Value>>, DawnStoreError> {
@@ -366,7 +378,7 @@ impl DawnstoreBackend for PostgresBackend {
             .collect())
     }
 
-    async fn get_object_infos(
+    async fn get_object_infos_impl(
         &self,
         filter: &GetObjectInfosFilter,
     ) -> Result<ObjectInfos, DawnStoreError> {
