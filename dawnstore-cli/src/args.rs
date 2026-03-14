@@ -25,11 +25,23 @@ pub struct Cli {
     #[arg(long, env = "DAWNSTORE_TOKEN")]
     pub token: Option<String>,
 }
+#[derive(Subcommand, Debug)]
+pub enum CreationKind {
+    Token {
+        token_name: String,
+        service_account: String,
+    },
+}
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
     /// Display one or many resources
     Get { resource: String },
+    /// Display one or many resources
+    Create {
+        #[command(subcommand)]
+        resource_kind: CreationKind,
+    },
     /// Delete resources
     Delete { resource: String, item_name: String },
     /// Edit resource

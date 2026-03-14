@@ -106,7 +106,7 @@ impl Api {
         envelope(resp).await
     }
 
-    pub async fn create_service_account_token(
+    pub async fn issue_service_account_token(
         &self,
         req: &IssueTokenRequest,
     ) -> Result<IssueTokenResponse, DawnstoreApiError> {

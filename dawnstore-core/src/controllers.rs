@@ -119,10 +119,10 @@ fn to_api_error(err: DawnStoreError) -> DawnStoreApiError {
             message: e.to_string(),
         },
         DawnStoreError::Forbidden => DawnStoreApiError::Forbidden,
-        // Internal errors: do not leak details to the client.
         DawnStoreError::DatabaseError(_)
         | DawnStoreError::InternalServerError(_)
         | DawnStoreError::JsonSchemaValidatorCreationError(_) => DawnStoreApiError::InternalError,
+        DawnStoreError::JwtError(jwt_error) => DawnStoreApiError::InternalError,
     }
 }
 
@@ -232,12 +232,12 @@ where
     if let Err(e) = check_namespace_restriction(&*state.backend, &obj) {
         return api_err(e);
     }
-
+    dbg!(&claims_ext);
     // RBAC: check Apply permission for every object in the payload (when JWT auth is active).
     if let Some(Extension(claims)) = &claims_ext {
         for (ns, kind, name) in extract_apply_identities(&obj) {
             let resolved_kind = state.backend.resolve_kind(&kind);
-
+            dbg!(&ns, &kind, &name, &resolved_kind);
             // Check the caller can apply this object.
             match authz_service::is_allowed(
                 &state.rbac_cache,

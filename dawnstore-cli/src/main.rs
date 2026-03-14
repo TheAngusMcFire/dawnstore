@@ -29,12 +29,33 @@ async fn main() -> color_eyre::Result<()> {
         Some(t) => dawnstore_client_lib::Api::new_with_token(&context.url, t),
         None => dawnstore_client_lib::Api::new(&context.url),
     };
+    let ns = args.namespace.as_deref().unwrap_or("default");
 
     match &args.command {
+        args::Commands::Create {
+            resource_kind:
+                args::CreationKind::Token {
+                    token_name,
+                    service_account,
+                },
+        } => {
+            let token = api
+                .issue_service_account_token(&IssueTokenRequest {
+                    namespace: ns.to_string(),
+                    service_account: service_account.clone(),
+                    token_name: token_name.clone(),
+                    expires_at: None,
+                })
+                .await?;
+            println!("{}", token.token);
+        }
         args::Commands::Get { resource }
             if resource == "resource-definitions" || resource == "rd" =>
         {
-            let rd = api.get_resource_definitions(&Default::default()).await.map_err(api_err)?;
+            let rd = api
+                .get_resource_definitions(&Default::default())
+                .await
+                .map_err(api_err)?;
             println!("{:20} {:20} {:20}", "Kind:", "ApiVersion:", "Aliases:");
             println!("------------------------------------------------------");
             for r in rd {
