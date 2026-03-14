@@ -175,6 +175,41 @@ pub async fn get_objects_by_filter(pool: &mut PgConnection, filter: &GetObjectsF
         query_builder.push_bind(x);
     }
 
+    match &filter.allowed {
+        Some(scopes) if scopes.is_empty() => {
+            // No permitted scopes → return nothing.
+            query_builder.push(" and false");
+        }
+        Some(scopes) => {
+            query_builder.push(" and (");
+            for (i, scope) in scopes.iter().enumerate() {
+                if i > 0 {
+                    query_builder.push(" or ");
+                }
+                query_builder.push("(");
+                if let Some(ns) = &scope.namespace {
+                    query_builder.push("namespace = ");
+                    query_builder.push_bind(ns);
+                    query_builder.push(" and ");
+                }
+                if scope.kind == "*" {
+                    query_builder.push("true");
+                } else {
+                    query_builder.push("kind = ");
+                    query_builder.push_bind(&scope.kind);
+                }
+                if let Some(names) = &scope.names {
+                    query_builder.push(" and name = ANY(");
+                    query_builder.push_bind(names);
+                    query_builder.push(")");
+                }
+                query_builder.push(")");
+            }
+            query_builder.push(")");
+        }
+        None => {} // unrestricted
+    }
+
     query_builder.push(" order by kind, name");
 
     if let Some(x) = &filter.page_size {
@@ -222,6 +257,40 @@ pub async fn get_api_object_infos_with_filter(pool: &mut PgConnection, filter: &
         query_builder.push(" and name ilike '%");
         query_builder.push_bind(x);
         query_builder.push("%' ");
+    }
+
+    match &filter.allowed {
+        Some(scopes) if scopes.is_empty() => {
+            query_builder.push(" and false");
+        }
+        Some(scopes) => {
+            query_builder.push(" and (");
+            for (i, scope) in scopes.iter().enumerate() {
+                if i > 0 {
+                    query_builder.push(" or ");
+                }
+                query_builder.push("(");
+                if let Some(ns) = &scope.namespace {
+                    query_builder.push("namespace = ");
+                    query_builder.push_bind(ns);
+                    query_builder.push(" and ");
+                }
+                if scope.kind == "*" {
+                    query_builder.push("true");
+                } else {
+                    query_builder.push("kind = ");
+                    query_builder.push_bind(&scope.kind);
+                }
+                if let Some(names) = &scope.names {
+                    query_builder.push(" and name = ANY(");
+                    query_builder.push_bind(names);
+                    query_builder.push(")");
+                }
+                query_builder.push(")");
+            }
+            query_builder.push(")");
+        }
+        None => {}
     }
 
     query_builder.push(" order by kind, name ");

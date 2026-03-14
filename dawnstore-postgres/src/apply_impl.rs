@@ -60,6 +60,68 @@ pub async fn validate_object_schema(
     cache.validate_schema(pool, api_version, kind, &obj.name, &obj.spec).await
 }
 
+/// Extract all FK referenced string IDs from a spec without touching the DB.
+///
+/// For 1-part FK values (`"name"`) the FK constraint's `foreign_key_kind` is used
+/// as the kind (not the parent object's kind). Missing optional FK fields are skipped.
+pub fn extract_fk_ids(
+    spec: &Value,
+    foreign_keys: &[super::data_models::ForeignKeyConstraint],
+    object_ns: &str,
+) -> Vec<String> {
+    let mut ids = Vec::new();
+
+    'outer: for key in foreign_keys {
+        let path_segments = key.key_path.split('.');
+        let mut key_position = None::<&Value>;
+        for seg in path_segments {
+            let k = match key_position {
+                Some(x) => x.get(seg),
+                None => spec.get(seg),
+            };
+            key_position = match k {
+                Some(x) => Some(x),
+                None if key.r#type == ForeignKeyType::OneOptional => continue 'outer,
+                None if key.r#type == ForeignKeyType::NoneOrMany => continue 'outer,
+                None => continue 'outer, // malformed; let check_foreign_keys handle the error
+            };
+        }
+        let Some(key_position) = key_position else { continue };
+
+        let raw_values: Vec<&str> = match (&key.r#type, key_position) {
+            (ForeignKeyType::One, Value::String(x)) => vec![x.as_str()],
+            (ForeignKeyType::OneOptional, Value::String(x)) => vec![x.as_str()],
+            (ForeignKeyType::OneOptional, Value::Null) => vec![],
+            (ForeignKeyType::OneOrMany, Value::String(x)) => vec![x.as_str()],
+            (ForeignKeyType::OneOrMany, Value::Array(arr)) => {
+                arr.iter().filter_map(|v| v.as_str()).collect()
+            }
+            (ForeignKeyType::NoneOrMany, Value::Null) => vec![],
+            (ForeignKeyType::NoneOrMany, Value::String(x)) => vec![x.as_str()],
+            (ForeignKeyType::NoneOrMany, Value::Array(arr)) => {
+                arr.iter().filter_map(|v| v.as_str()).collect()
+            }
+            _ => continue,
+        };
+
+        for raw in raw_values {
+            let comps: Vec<&str> = raw.splitn(3, '/').collect();
+            let sid = match comps.as_slice() {
+                [ns, k, name] => format!("{ns}/{k}/{name}"),
+                [k, name] => format!("{object_ns}/{k}/{name}"),
+                [name] => {
+                    let k = key.foreign_key_kind.as_deref().unwrap_or("");
+                    format!("{object_ns}/{k}/{name}")
+                }
+                _ => continue,
+            };
+            ids.push(sid);
+        }
+    }
+
+    ids
+}
+
 pub async fn check_foreign_keys(
     pool: &mut PgConnection,
     cache: &CacheStore,

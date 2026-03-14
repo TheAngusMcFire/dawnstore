@@ -378,6 +378,18 @@ impl DawnstoreBackend for PostgresBackend {
             .collect())
     }
 
+    async fn get_fk_refs(
+        &self,
+        api_version: &str,
+        kind: &str,
+        spec: &serde_json::Value,
+        namespace: &str,
+    ) -> Result<Vec<String>, DawnStoreError> {
+        let mut con = self.pool.acquire().await?;
+        let constraints = self.cache.get_foreign_keys(con.as_mut(), api_version, kind).await?;
+        Ok(apply_impl::extract_fk_ids(spec, &constraints, namespace))
+    }
+
     async fn get_object_infos_impl(
         &self,
         filter: &GetObjectInfosFilter,

@@ -1,0 +1,84 @@
+# RBAC test fixture — 3 service accounts, 3 roles, 3 role bindings.
+#
+# Apply with:
+#   DAWNSTORE_CONTEXT=./context.yml dawnstore-cli apply examples/rbac-test.yaml
+#
+# Namespace "demo" is created first (namespace objects must live in "system").
+# All RBAC objects are api_version: v1.
+
+- api_version: v1
+  kind: namespace
+  namespace: system
+  name: demo
+
+# ── Service accounts ──────────────────────────────────────────────────────────
+
+- api_version: v1
+  kind: serviceaccount
+  namespace: demo
+  name: alice        # full access
+
+- api_version: v1
+  kind: serviceaccount
+  namespace: demo
+  name: bob          # read + apply, no delete
+
+- api_version: v1
+  kind: serviceaccount
+  namespace: demo
+  name: carol        # read only
+
+# ── Roles ─────────────────────────────────────────────────────────────────────
+
+- api_version: v1
+  kind: role
+  namespace: demo
+  name: admin
+  rules:
+    - api_version: "*"
+      kinds: ["*"]
+      verbs: [get, apply, delete]
+
+- api_version: v1
+  kind: role
+  namespace: demo
+  name: editor
+  rules:
+    - api_version: "*"
+      kinds: ["*"]
+      verbs: [get, apply]
+
+- api_version: v1
+  kind: role
+  namespace: demo
+  name: viewer
+  rules:
+    - api_version: "*"
+      kinds: ["*"]
+      verbs: [get]
+
+# ── Role bindings ─────────────────────────────────────────────────────────────
+
+- api_version: v1
+  kind: rolebinding
+  namespace: demo
+  name: alice-admin
+  role: role/admin
+  subjects:
+    - serviceaccount/alice
+
+- api_version: v1
+  kind: rolebinding
+  namespace: demo
+  name: bob-editor
+  role: role/editor
+  subjects:
+    - serviceaccount/bob
+
+- api_version: v1
+  kind: rolebinding
+  namespace: demo
+  name: carol-viewer
+  role: role/viewer
+  subjects:
+    - serviceaccount/carol

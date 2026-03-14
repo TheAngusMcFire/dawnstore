@@ -61,7 +61,10 @@ async fn main() -> eyre::Result<()> {
 
     let backend = Arc::new(backend);
 
-    let dawnstore_routes = get_dawnstore_default_routes(Arc::clone(&backend));
+    let rbac_cache = Arc::new(dawnstore_core::rbac::RbacCache::new());
+    rbac_cache.warm(&*backend).await?;
+
+    let dawnstore_routes = get_dawnstore_default_routes(Arc::clone(&backend), Arc::clone(&rbac_cache));
     let rbac_routes =
         dawnstore_core::rbac::get_rbac_routes(Arc::clone(&backend), private_key_pem);
 

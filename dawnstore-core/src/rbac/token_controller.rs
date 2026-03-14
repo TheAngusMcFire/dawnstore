@@ -13,6 +13,8 @@ use uuid::Uuid;
 
 use crate::abstractions::{DawnstoreBackend, Object};
 use super::authz_service::is_superadmin;
+use super::constants::{API_VERSION_V1, KIND_SERVICE_ACCOUNT, KIND_SERVICE_ACCOUNT_TOKEN};
+use super::helpers::object_string_id;
 use super::jwt_service;
 use super::middleware::Claims;
 use super::models::ServiceAccountToken;
@@ -72,12 +74,11 @@ async fn issue_token<B: DawnstoreBackend + 'static>(
 
     let expires_at = req.expires_at.unwrap_or_else(|| Utc::now() + Duration::days(365));
 
-    // FK reference: namespace/kind/name
-    let sa_ref = format!("{}/serviceaccount/{}", req.namespace, req.service_account);
+    let sa_ref = object_string_id(&req.namespace, KIND_SERVICE_ACCOUNT, &req.service_account);
 
     let token_obj: Object<ServiceAccountToken> = Object {
-        api_version: Some("v1".to_string()),
-        kind: Some("serviceaccounttoken".to_string()),
+        api_version: Some(API_VERSION_V1.to_string()),
+        kind: Some(KIND_SERVICE_ACCOUNT_TOKEN.to_string()),
         namespace: Some(req.namespace.clone()),
         name: req.token_name.clone(),
         spec: ServiceAccountToken { service_account: sa_ref, expires_at: Some(expires_at) },

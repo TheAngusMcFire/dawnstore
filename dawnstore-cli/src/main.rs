@@ -64,6 +64,7 @@ async fn main() -> color_eyre::Result<()> {
                 page_size: None,
                 fill_child_foreign_keys: false,
                 fill_parent_foreign_keys: false,
+                allowed: None,
             };
             let rd = api.get_objects(&filter).await.map_err(api_err)?;
             println!(
@@ -97,6 +98,7 @@ async fn main() -> color_eyre::Result<()> {
                 page_size: None,
                 fill_child_foreign_keys: true,
                 fill_parent_foreign_keys: true,
+                allowed: None,
             };
             let mut rd = api.get_objects(&filter).await.map_err(api_err)?;
             let Some(obj) = rd.pop() else {

@@ -17,6 +17,7 @@ pub enum DawnStoreApiError {
     ValidationError { name: String, message: String },
     ForeignKeyNotFound { value: String },
     InvalidInput { message: String },
+    Forbidden,
     InternalError,
 }
 
@@ -95,6 +96,22 @@ fn is_none_or_empty(v: &Option<BTreeMap<String, String>>) -> bool {
     v.as_ref().is_none_or(|map| map.is_empty())
 }
 
+/// A single permission scope used to restrict object queries to what the caller
+/// is authorised to see.
+///
+/// - `namespace`: `None` = any namespace (from a global role binding).
+/// - `kind`: `"*"` = any kind.
+/// - `names`: `None` = all names permitted; `Some(vec)` = restrict to these names.
+#[derive(serde::Deserialize, serde::Serialize, Debug, Clone)]
+pub struct AllowedScope {
+    /// `None` means any namespace (global grant).
+    pub namespace: Option<String>,
+    /// `"*"` matches all kinds.
+    pub kind: String,
+    /// `None` means all names in this (namespace, kind) are permitted.
+    pub names: Option<Vec<String>>,
+}
+
 #[derive(serde::Deserialize, serde::Serialize, Debug, Default, Clone)]
 pub struct GetObjectsFilter {
     pub namespace: Option<String>,
@@ -107,6 +124,10 @@ pub struct GetObjectsFilter {
     pub ids: Option<Vec<Uuid>>,
     pub page: Option<usize>,
     pub page_size: Option<usize>,
+    /// RBAC constraint injected by the controller. `None` = unrestricted
+    /// (superadmin). `Some([])` = deny all (no matching scopes).
+    #[serde(skip)]
+    pub allowed: Option<Vec<AllowedScope>>,
 }
 
 #[derive(serde::Deserialize, serde::Serialize, Debug)]
@@ -150,7 +171,7 @@ pub struct ObjectInfos {
     pub infos: Vec<ObjectInfo>,
 }
 
-#[derive(serde::Deserialize, serde::Serialize, Debug, Clone)]
+#[derive(serde::Deserialize, serde::Serialize, Debug, Clone, Default)]
 pub struct GetObjectInfosFilter {
     pub namespace: Option<String>,
     pub kind: Option<String>,
@@ -158,4 +179,7 @@ pub struct GetObjectInfosFilter {
     pub name_search_string: Option<String>,
     pub page: Option<usize>,
     pub page_size: Option<usize>,
+    /// RBAC constraint — same semantics as [`GetObjectsFilter::allowed`].
+    #[serde(skip)]
+    pub allowed: Option<Vec<AllowedScope>>,
 }

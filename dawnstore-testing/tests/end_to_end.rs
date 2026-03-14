@@ -41,7 +41,8 @@ async fn spawn_server(pool: PgPool) -> Api {
         .unwrap();
 
     let backend = Arc::new(backend);
-    let app = Router::new().merge(get_dawnstore_default_routes(backend));
+    let rbac_cache = Arc::new(dawnstore_core::rbac::RbacCache::new());
+    let app = Router::new().merge(get_dawnstore_default_routes(backend, rbac_cache));
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base_url = format!("http://{}", listener.local_addr().unwrap());
 
@@ -573,6 +574,22 @@ async fn spawn_rbac_server(pool: PgPool) -> RbacTestServer {
 
     dawnstore_core::rbac::init(&backend).await.unwrap();
 
+    // Also seed the container schema so RBAC enforcement tests can use it.
+    backend
+        .seed_object_schema::<Container>(
+            "v2",
+            "container",
+            ["containers"],
+            [ForeignKey::new(
+                "parent",
+                Some("children"),
+                ForeignKeyType::OneOptional,
+                Some("container"),
+            )],
+        )
+        .await
+        .unwrap();
+
     let bootstrap_token =
         dawnstore_core::rbac::bootstrap(&backend, &keypair.private_key_pem)
             .await
@@ -580,7 +597,8 @@ async fn spawn_rbac_server(pool: PgPool) -> RbacTestServer {
             .expect("first startup must return a bootstrap token");
 
     let backend = Arc::new(backend);
-    let dawnstore_routes = get_dawnstore_default_routes(Arc::clone(&backend));
+    let rbac_cache = Arc::new(dawnstore_core::rbac::RbacCache::new());
+    let dawnstore_routes = get_dawnstore_default_routes(Arc::clone(&backend), Arc::clone(&rbac_cache));
     let rbac_routes = dawnstore_core::rbac::get_rbac_routes(
         Arc::clone(&backend),
         keypair.private_key_pem.clone(),
@@ -939,6 +957,617 @@ async fn auth_rejects_missing_bearer_prefix(pool: PgPool) -> sqlx::Result<()> {
         get_objects_with_auth(&server, &server.bootstrap_token).await,
         401,
         "raw token without scheme must be rejected"
+    );
+
+    Ok(())
+}
+
+// ── RBAC permission enforcement ───────────────────────────────────────────────
+
+/// Issue a JWT for a service account (the SA must already exist in the DB).
+async fn issue_jwt(server: &RbacTestServer, namespace: &str, sa_name: &str, token_name: &str) -> String {
+    let resp = server
+        .api
+        .get_client()
+        .post(format!("{}/rbac/issue-token", server.api.get_base_url()))
+        .bearer_auth(&server.bootstrap_token)
+        .json(&serde_json::json!({
+            "namespace": namespace,
+            "service_account": sa_name,
+            "token_name": token_name
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(resp.status().is_success(), "failed to issue token");
+    resp.json::<serde_json::Value>().await.unwrap()["token"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+/// Apply a JSON object via HTTP using the given Bearer token.
+async fn http_apply(server: &RbacTestServer, token: &str, body: serde_json::Value) -> serde_json::Value {
+    server
+        .api
+        .get_client()
+        .post(format!("{}/apply", server.api.get_base_url()))
+        .bearer_auth(token)
+        .json(&body)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap()
+}
+
+/// GET objects via HTTP using the given Bearer token.
+async fn http_get_objects(
+    server: &RbacTestServer,
+    token: &str,
+    filter: serde_json::Value,
+) -> serde_json::Value {
+    server
+        .api
+        .get_client()
+        .post(format!("{}/get-objects", server.api.get_base_url()))
+        .bearer_auth(token)
+        .json(&filter)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap()
+}
+
+/// DELETE an object via HTTP using the given Bearer token.
+async fn http_delete(server: &RbacTestServer, token: &str, body: serde_json::Value) -> serde_json::Value {
+    server
+        .api
+        .get_client()
+        .delete(format!("{}/delete-object", server.api.get_base_url()))
+        .bearer_auth(token)
+        .json(&body)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap()
+}
+
+/// Superadmin sets up:
+///   - namespace `testns`
+///   - serviceaccount `testns/alice`
+///   - role `testns/editor` granting apply+get+delete on `container`
+///   - rolebinding `testns/bind-alice` binding alice to editor
+/// Returns alice's JWT.
+async fn setup_alice_with_editor_role(server: &RbacTestServer) -> String {
+    let sa = &server.bootstrap_token;
+
+    // Create namespace and service account.
+    http_apply(server, sa, serde_json::json!([
+        {"api_version": "v1", "kind": "namespace", "namespace": "system", "name": "testns"},
+        {"api_version": "v1", "kind": "serviceaccount", "namespace": "testns", "name": "alice"}
+    ])).await;
+
+    // Create a role granting full access to "container" kind.
+    http_apply(server, sa, serde_json::json!({
+        "api_version": "v1",
+        "kind": "role",
+        "namespace": "testns",
+        "name": "editor",
+        "rules": [{"api_version": "*", "kinds": ["container"], "verbs": ["get", "apply", "delete"]}]
+    })).await;
+
+    // Bind alice to the editor role (use 2-part FK: kind/name).
+    http_apply(server, sa, serde_json::json!({
+        "api_version": "v1",
+        "kind": "rolebinding",
+        "namespace": "testns",
+        "name": "bind-alice",
+        "role": "role/editor",
+        "subjects": ["serviceaccount/alice"]
+    })).await;
+
+    issue_jwt(server, "testns", "alice", "alice-token").await
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn rbac_permitted_sa_can_apply_and_get(pool: PgPool) -> sqlx::Result<()> {
+    let server = spawn_rbac_server(pool).await;
+
+    // Seed container schema.
+    server.api.get_client()
+        .post(format!("{}/apply", server.api.get_base_url()))
+        .bearer_auth(&server.bootstrap_token)
+        .json(&serde_json::json!({
+            "api_version": "v1", "kind": "namespace", "namespace": "system", "name": "testns"
+        }))
+        .send().await.unwrap();
+
+    let alice_jwt = setup_alice_with_editor_role(&server).await;
+
+    // Alice applies a container in testns.
+    let apply_resp = http_apply(&server, &alice_jwt, serde_json::json!({
+        "api_version": "v2",
+        "kind": "container",
+        "namespace": "testns",
+        "name": "box1",
+        "nr": 1
+    })).await;
+    assert!(apply_resp["error"].is_null(), "apply should succeed: {apply_resp}");
+
+    // Alice can read it back.
+    let get_resp = http_get_objects(&server, &alice_jwt, serde_json::json!({
+        "namespace": "testns",
+        "kind": "container"
+    })).await;
+    assert!(get_resp["error"].is_null(), "get should succeed: {get_resp}");
+    let items = get_resp["data"].as_array().unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["name"], "box1");
+
+    Ok(())
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn rbac_unpermitted_sa_cannot_apply(pool: PgPool) -> sqlx::Result<()> {
+    let server = spawn_rbac_server(pool).await;
+
+    // Create bob without any role binding.
+    http_apply(&server, &server.bootstrap_token, serde_json::json!([
+        {"api_version": "v1", "kind": "namespace", "namespace": "system", "name": "testns"},
+        {"api_version": "v1", "kind": "serviceaccount", "namespace": "testns", "name": "bob"}
+    ])).await;
+    let bob_jwt = issue_jwt(&server, "testns", "bob", "bob-token").await;
+
+    // Bob attempts to apply a container — must be forbidden.
+    let resp = http_apply(&server, &bob_jwt, serde_json::json!({
+        "api_version": "v2",
+        "kind": "container",
+        "namespace": "testns",
+        "name": "box1",
+        "nr": 1
+    })).await;
+    assert!(resp["data"].is_null(), "bob must not be able to apply: {resp}");
+    assert!(!resp["error"].is_null(), "error must be set: {resp}");
+    assert_eq!(resp["error"]["type"], "forbidden");
+
+    Ok(())
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn rbac_unpermitted_sa_gets_empty_results(pool: PgPool) -> sqlx::Result<()> {
+    let server = spawn_rbac_server(pool).await;
+
+    // Superadmin creates a container.
+    http_apply(&server, &server.bootstrap_token, serde_json::json!([
+        {"api_version": "v1", "kind": "namespace", "namespace": "system", "name": "testns"},
+        {"api_version": "v1", "kind": "serviceaccount", "namespace": "testns", "name": "bob"}
+    ])).await;
+    http_apply(&server, &server.bootstrap_token, serde_json::json!({
+        "api_version": "v2",
+        "kind": "container",
+        "namespace": "testns",
+        "name": "secret-box",
+        "nr": 42
+    })).await;
+
+    let bob_jwt = issue_jwt(&server, "testns", "bob", "bob-token").await;
+
+    // Bob queries containers — gets empty list (no error, just nothing visible).
+    let resp = http_get_objects(&server, &bob_jwt, serde_json::json!({
+        "namespace": "testns",
+        "kind": "container"
+    })).await;
+    assert!(resp["error"].is_null(), "should not error: {resp}");
+    let items = get_resp_data_array(&resp);
+    assert!(items.is_empty(), "bob must see no objects: {resp}");
+
+    Ok(())
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn rbac_permitted_sa_can_delete(pool: PgPool) -> sqlx::Result<()> {
+    let server = spawn_rbac_server(pool).await;
+    let alice_jwt = setup_alice_with_editor_role(&server).await;
+
+    // Superadmin creates the object.
+    http_apply(&server, &server.bootstrap_token, serde_json::json!({
+        "api_version": "v2",
+        "kind": "container",
+        "namespace": "testns",
+        "name": "deletable",
+        "nr": 1
+    })).await;
+
+    // Alice deletes it.
+    let resp = http_delete(&server, &alice_jwt, serde_json::json!({
+        "namespace": "testns",
+        "kind": "container",
+        "name": "deletable"
+    })).await;
+    assert!(resp["error"].is_null(), "alice must be able to delete: {resp}");
+
+    // Confirm it is gone.
+    let get_resp = http_get_objects(&server, &server.bootstrap_token, serde_json::json!({
+        "namespace": "testns",
+        "kind": "container"
+    })).await;
+    let items = get_resp_data_array(&get_resp);
+    assert!(items.is_empty(), "object should be deleted");
+
+    Ok(())
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn rbac_unpermitted_sa_cannot_delete(pool: PgPool) -> sqlx::Result<()> {
+    let server = spawn_rbac_server(pool).await;
+
+    http_apply(&server, &server.bootstrap_token, serde_json::json!([
+        {"api_version": "v1", "kind": "namespace", "namespace": "system", "name": "testns"},
+        {"api_version": "v1", "kind": "serviceaccount", "namespace": "testns", "name": "bob"}
+    ])).await;
+    http_apply(&server, &server.bootstrap_token, serde_json::json!({
+        "api_version": "v2",
+        "kind": "container",
+        "namespace": "testns",
+        "name": "protected",
+        "nr": 1
+    })).await;
+
+    let bob_jwt = issue_jwt(&server, "testns", "bob", "bob-token").await;
+
+    let resp = http_delete(&server, &bob_jwt, serde_json::json!({
+        "namespace": "testns",
+        "kind": "container",
+        "name": "protected"
+    })).await;
+    assert!(!resp["error"].is_null(), "delete must be forbidden: {resp}");
+    assert_eq!(resp["error"]["type"], "forbidden");
+
+    Ok(())
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn rbac_cache_invalidated_after_rolebinding_removed(pool: PgPool) -> sqlx::Result<()> {
+    let server = spawn_rbac_server(pool).await;
+    let alice_jwt = setup_alice_with_editor_role(&server).await;
+
+    // Alice can currently apply.
+    let resp = http_apply(&server, &alice_jwt, serde_json::json!({
+        "api_version": "v2",
+        "kind": "container",
+        "namespace": "testns",
+        "name": "box1",
+        "nr": 1
+    })).await;
+    assert!(resp["error"].is_null(), "alice should be able to apply initially: {resp}");
+
+    // Superadmin removes the role binding.
+    http_delete(&server, &server.bootstrap_token, serde_json::json!({
+        "namespace": "testns",
+        "kind": "rolebinding",
+        "name": "bind-alice"
+    })).await;
+
+    // Alice must now be denied.
+    let resp = http_apply(&server, &alice_jwt, serde_json::json!({
+        "api_version": "v2",
+        "kind": "container",
+        "namespace": "testns",
+        "name": "box2",
+        "nr": 2
+    })).await;
+    assert!(!resp["error"].is_null(), "alice must be forbidden after binding removed: {resp}");
+    assert_eq!(resp["error"]["type"], "forbidden");
+
+    Ok(())
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn rbac_superadmin_sees_all_objects(pool: PgPool) -> sqlx::Result<()> {
+    let server = spawn_rbac_server(pool).await;
+
+    // Create objects in two different namespaces.
+    http_apply(&server, &server.bootstrap_token, serde_json::json!([
+        {"api_version": "v1", "kind": "namespace", "namespace": "system", "name": "ns-a"},
+        {"api_version": "v1", "kind": "namespace", "namespace": "system", "name": "ns-b"}
+    ])).await;
+    http_apply(&server, &server.bootstrap_token, serde_json::json!([
+        {"api_version": "v2", "kind": "container", "namespace": "ns-a", "name": "box-a", "nr": 1},
+        {"api_version": "v2", "kind": "container", "namespace": "ns-b", "name": "box-b", "nr": 2}
+    ])).await;
+
+    // Superadmin queries without namespace filter — must see both.
+    let resp = http_get_objects(&server, &server.bootstrap_token, serde_json::json!({
+        "kind": "container"
+    })).await;
+    assert!(resp["error"].is_null(), "superadmin get should not error: {resp}");
+    let items = get_resp_data_array(&resp);
+    assert_eq!(items.len(), 2, "superadmin must see objects from all namespaces");
+
+    Ok(())
+}
+
+fn get_resp_data_array(resp: &serde_json::Value) -> Vec<&serde_json::Value> {
+    resp["data"].as_array().map(|a| a.iter().collect()).unwrap_or_default()
+}
+
+// ── Additional negative GET / APPLY / FK tests ─────────────────────────────
+
+/// Set up bob with a role that grants get+apply+delete on `container`
+/// but has a name restriction to only ["allowed-parent"]. Returns bob's JWT.
+async fn setup_bob_name_restricted(server: &RbacTestServer) -> String {
+    let sa = &server.bootstrap_token;
+
+    http_apply(server, sa, serde_json::json!([
+        {"api_version": "v1", "kind": "namespace", "namespace": "system", "name": "testns"},
+        {"api_version": "v1", "kind": "serviceaccount", "namespace": "testns", "name": "bob"}
+    ])).await;
+
+    http_apply(server, sa, serde_json::json!({
+        "api_version": "v1",
+        "kind": "role",
+        "namespace": "testns",
+        "name": "restricted",
+        "rules": [{
+            "api_version": "*",
+            "kinds": ["container"],
+            "verbs": ["get", "apply", "delete"],
+            "names": ["allowed-parent"]
+        }]
+    })).await;
+
+    http_apply(server, sa, serde_json::json!({
+        "api_version": "v1",
+        "kind": "rolebinding",
+        "namespace": "testns",
+        "name": "bind-bob",
+        "role": "role/restricted",
+        "subjects": ["serviceaccount/bob"]
+    })).await;
+
+    issue_jwt(server, "testns", "bob", "bob-token").await
+}
+
+// ── Negative GET ──────────────────────────────────────────────────────────────
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn rbac_get_restricted_to_permitted_kind_only(pool: PgPool) -> sqlx::Result<()> {
+    let server = spawn_rbac_server(pool).await;
+    let alice_jwt = setup_alice_with_editor_role(&server).await;
+
+    // Create a serviceaccount in testns as superadmin.
+    http_apply(&server, &server.bootstrap_token, serde_json::json!({
+        "api_version": "v1",
+        "kind": "serviceaccount",
+        "namespace": "testns",
+        "name": "other-sa"
+    })).await;
+
+    // Alice's role only covers "container". Querying serviceaccount should return empty.
+    let resp = http_get_objects(&server, &alice_jwt, serde_json::json!({
+        "namespace": "testns",
+        "kind": "serviceaccount"
+    })).await;
+    assert!(resp["error"].is_null(), "should not error: {resp}");
+    assert!(
+        get_resp_data_array(&resp).is_empty(),
+        "alice must not see serviceaccounts she has no role for: {resp}"
+    );
+
+    Ok(())
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn rbac_get_name_restricted_role_filters_by_name(pool: PgPool) -> sqlx::Result<()> {
+    let server = spawn_rbac_server(pool).await;
+    let bob_jwt = setup_bob_name_restricted(&server).await;
+
+    // Superadmin creates two containers.
+    http_apply(&server, &server.bootstrap_token, serde_json::json!([
+        {"api_version": "v2", "kind": "container", "namespace": "testns", "name": "allowed-parent", "nr": 1},
+        {"api_version": "v2", "kind": "container", "namespace": "testns", "name": "secret-box", "nr": 2}
+    ])).await;
+
+    // Bob queries all containers — must only see "allowed-parent".
+    let resp = http_get_objects(&server, &bob_jwt, serde_json::json!({
+        "namespace": "testns",
+        "kind": "container"
+    })).await;
+    assert!(resp["error"].is_null(), "should not error: {resp}");
+    let items = get_resp_data_array(&resp);
+    assert_eq!(items.len(), 1, "bob must see only the permitted container: {resp}");
+    assert_eq!(items[0]["name"], "allowed-parent");
+
+    Ok(())
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn rbac_get_without_kind_filter_respects_permissions(pool: PgPool) -> sqlx::Result<()> {
+    let server = spawn_rbac_server(pool).await;
+    let alice_jwt = setup_alice_with_editor_role(&server).await;
+
+    // Superadmin creates a container and a serviceaccount in testns.
+    http_apply(&server, &server.bootstrap_token, serde_json::json!([
+        {"api_version": "v2", "kind": "container", "namespace": "testns", "name": "visible-box", "nr": 1},
+        {"api_version": "v1", "kind": "serviceaccount", "namespace": "testns", "name": "invisible-sa"}
+    ])).await;
+
+    // Alice queries without kind filter.
+    let resp = http_get_objects(&server, &alice_jwt, serde_json::json!({
+        "namespace": "testns"
+    })).await;
+    assert!(resp["error"].is_null(), "should not error: {resp}");
+    let items = get_resp_data_array(&resp);
+    // Alice should see the container but NOT the serviceaccount.
+    assert!(
+        items.iter().any(|o| o["name"] == "visible-box"),
+        "alice must see the container: {resp}"
+    );
+    assert!(
+        !items.iter().any(|o| o["name"] == "invisible-sa"),
+        "alice must not see serviceaccounts: {resp}"
+    );
+
+    Ok(())
+}
+
+// ── Negative APPLY ────────────────────────────────────────────────────────────
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn rbac_get_only_role_cannot_apply(pool: PgPool) -> sqlx::Result<()> {
+    let server = spawn_rbac_server(pool).await;
+    let sa = &server.bootstrap_token;
+
+    http_apply(&server, sa, serde_json::json!([
+        {"api_version": "v1", "kind": "namespace", "namespace": "system", "name": "testns"},
+        {"api_version": "v1", "kind": "serviceaccount", "namespace": "testns", "name": "reader"}
+    ])).await;
+
+    // Role grants only `get`, not `apply`.
+    http_apply(&server, sa, serde_json::json!({
+        "api_version": "v1",
+        "kind": "role",
+        "namespace": "testns",
+        "name": "readonly",
+        "rules": [{"api_version": "*", "kinds": ["container"], "verbs": ["get"]}]
+    })).await;
+    http_apply(&server, sa, serde_json::json!({
+        "api_version": "v1",
+        "kind": "rolebinding",
+        "namespace": "testns",
+        "name": "bind-reader",
+        "role": "role/readonly",
+        "subjects": ["serviceaccount/reader"]
+    })).await;
+
+    let reader_jwt = issue_jwt(&server, "testns", "reader", "reader-token").await;
+
+    let resp = http_apply(&server, &reader_jwt, serde_json::json!({
+        "api_version": "v2",
+        "kind": "container",
+        "namespace": "testns",
+        "name": "my-box",
+        "nr": 1
+    })).await;
+    assert!(!resp["error"].is_null(), "get-only role must not apply: {resp}");
+    assert_eq!(resp["error"]["type"], "forbidden");
+
+    Ok(())
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn rbac_cannot_apply_kind_not_in_role(pool: PgPool) -> sqlx::Result<()> {
+    let server = spawn_rbac_server(pool).await;
+
+    // alice has editor role for "container" only.
+    let alice_jwt = setup_alice_with_editor_role(&server).await;
+
+    // Alice tries to apply a serviceaccount (not in her role).
+    let resp = http_apply(&server, &alice_jwt, serde_json::json!({
+        "api_version": "v1",
+        "kind": "serviceaccount",
+        "namespace": "testns",
+        "name": "new-sa"
+    })).await;
+    assert!(!resp["error"].is_null(), "applying wrong kind must be forbidden: {resp}");
+    assert_eq!(resp["error"]["type"], "forbidden");
+
+    Ok(())
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn rbac_cannot_apply_name_outside_name_restriction(pool: PgPool) -> sqlx::Result<()> {
+    let server = spawn_rbac_server(pool).await;
+    let bob_jwt = setup_bob_name_restricted(&server).await;
+
+    // Bob tries to apply a container named "secret-box" — not in his allowed names.
+    let resp = http_apply(&server, &bob_jwt, serde_json::json!({
+        "api_version": "v2",
+        "kind": "container",
+        "namespace": "testns",
+        "name": "secret-box",
+        "nr": 99
+    })).await;
+    assert!(!resp["error"].is_null(), "applying outside name restriction must be forbidden: {resp}");
+    assert_eq!(resp["error"]["type"], "forbidden");
+
+    // Bob CAN apply the permitted name.
+    let ok_resp = http_apply(&server, &bob_jwt, serde_json::json!({
+        "api_version": "v2",
+        "kind": "container",
+        "namespace": "testns",
+        "name": "allowed-parent",
+        "nr": 1
+    })).await;
+    assert!(ok_resp["error"].is_null(), "allowed-parent should succeed: {ok_resp}");
+
+    Ok(())
+}
+
+// ── FK access check in apply ──────────────────────────────────────────────────
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn rbac_apply_denied_when_fk_target_inaccessible(pool: PgPool) -> sqlx::Result<()> {
+    let server = spawn_rbac_server(pool).await;
+
+    // Superadmin creates "secret-parent" container in testns.
+    http_apply(&server, &server.bootstrap_token, serde_json::json!([
+        {"api_version": "v1", "kind": "namespace", "namespace": "system", "name": "testns"},
+        {"api_version": "v2", "kind": "container", "namespace": "testns", "name": "secret-parent", "nr": 0}
+    ])).await;
+
+    let bob_jwt = setup_bob_name_restricted(&server).await;
+    // Bob's role allows get/apply/delete on container, but only for names=["allowed-parent"].
+    // "secret-parent" is NOT in his allowed names, so he has no Get access to it.
+
+    // Bob tries to apply a container with parent FK pointing at "secret-parent".
+    let resp = http_apply(&server, &bob_jwt, serde_json::json!({
+        "api_version": "v2",
+        "kind": "container",
+        "namespace": "testns",
+        "name": "allowed-parent",
+        "nr": 1,
+        "parent": "container/secret-parent"
+    })).await;
+    assert!(
+        !resp["error"].is_null(),
+        "apply must be denied when FK target is inaccessible: {resp}"
+    );
+    assert_eq!(resp["error"]["type"], "forbidden");
+
+    Ok(())
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn rbac_apply_allowed_when_fk_target_is_accessible(pool: PgPool) -> sqlx::Result<()> {
+    let server = spawn_rbac_server(pool).await;
+
+    // Superadmin creates the parent container that bob IS allowed to access.
+    http_apply(&server, &server.bootstrap_token, serde_json::json!([
+        {"api_version": "v1", "kind": "namespace", "namespace": "system", "name": "testns"},
+        {"api_version": "v2", "kind": "container", "namespace": "testns", "name": "allowed-parent", "nr": 0}
+    ])).await;
+
+    let bob_jwt = setup_bob_name_restricted(&server).await;
+
+    // Bob applies a container with parent FK pointing at "allowed-parent" — must succeed.
+    let resp = http_apply(&server, &bob_jwt, serde_json::json!({
+        "api_version": "v2",
+        "kind": "container",
+        "namespace": "testns",
+        "name": "allowed-parent",
+        "nr": 1,
+        "parent": "container/allowed-parent"
+    })).await;
+    assert!(
+        resp["error"].is_null(),
+        "apply must succeed when FK target is accessible: {resp}"
     );
 
     Ok(())

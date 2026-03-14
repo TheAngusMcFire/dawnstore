@@ -149,6 +149,17 @@ pub trait DawnstoreBackend: Send + Sync {
         filter: &GetObjectInfosFilter,
     ) -> impl Future<Output = Result<ObjectInfos, DawnStoreError>> + Send;
 
+    /// Extract all FK-referenced object string IDs (`ns/kind/name`) from `spec`
+    /// for the given `(api_version, kind)`. Used by the controller to check that
+    /// the caller has `Get` access to every referenced object before applying.
+    fn get_fk_refs(
+        &self,
+        api_version: &str,
+        kind: &str,
+        spec: &serde_json::Value,
+        namespace: &str,
+    ) -> impl Future<Output = Result<Vec<String>, DawnStoreError>> + Send;
+
     // ── Default methods ───────────────────────────────────────────────────────
 
     /// Type-safe apply: serializes `Object<T>` and delegates to `apply_raw`.

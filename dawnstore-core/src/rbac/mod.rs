@@ -1,8 +1,15 @@
 pub mod authz_service;
+pub mod cache;
+pub mod constants;
+pub mod helpers;
 pub mod jwt_service;
 pub mod middleware;
 pub mod models;
 mod token_controller;
+
+pub use cache::RbacCache;
+pub use constants::*;
+pub use helpers::object_string_id;
 
 use std::sync::Arc;
 
@@ -17,48 +24,48 @@ use crate::error::DawnStoreError;
 
 pub fn schemas() -> Vec<SchemaDefinition> {
     vec![
-        SchemaDefinition::new::<Namespace>("v1", "namespace", ["namespaces", "ns"], []),
+        SchemaDefinition::new::<Namespace>(API_VERSION_V1, KIND_NAMESPACE, ["namespaces", "ns"], []),
         SchemaDefinition::new::<ServiceAccount>(
-            "v1", "serviceaccount", ["serviceaccounts", "sa"], [],
+            API_VERSION_V1, KIND_SERVICE_ACCOUNT, ["serviceaccounts", "sa"], [],
         ),
         SchemaDefinition::new::<ServiceAccountToken>(
-            "v1",
-            "serviceaccounttoken",
+            API_VERSION_V1,
+            KIND_SERVICE_ACCOUNT_TOKEN,
             ["serviceaccounttokens", "sat"],
             [ForeignKey::new(
                 "service_account",
                 None::<&str>,
                 ForeignKeyType::One,
-                Some("serviceaccount"),
+                Some(KIND_SERVICE_ACCOUNT),
             )],
         ),
-        SchemaDefinition::new::<Role>("v1", "role", ["roles", "ro"], []),
-        SchemaDefinition::new::<GlobalRole>("v1", "globalrole", ["globalroles", "gr"], []),
+        SchemaDefinition::new::<Role>(API_VERSION_V1, KIND_ROLE, ["roles", "ro"], []),
+        SchemaDefinition::new::<GlobalRole>(API_VERSION_V1, KIND_GLOBAL_ROLE, ["globalroles", "gr"], []),
         SchemaDefinition::new::<RoleBinding>(
-            "v1",
-            "rolebinding",
+            API_VERSION_V1,
+            KIND_ROLE_BINDING,
             ["rolebindings", "rb"],
             [
-                ForeignKey::new("role", None::<&str>, ForeignKeyType::One, Some("role")),
+                ForeignKey::new("role", None::<&str>, ForeignKeyType::One, Some(KIND_ROLE)),
                 ForeignKey::new(
                     "subjects",
                     None::<&str>,
                     ForeignKeyType::OneOrMany,
-                    Some("serviceaccount"),
+                    Some(KIND_SERVICE_ACCOUNT),
                 ),
             ],
         ),
         SchemaDefinition::new::<GlobalRoleBinding>(
-            "v1",
-            "globalrolebinding",
+            API_VERSION_V1,
+            KIND_GLOBAL_ROLE_BINDING,
             ["globalrolebindings", "grb"],
             [
-                ForeignKey::new("role", None::<&str>, ForeignKeyType::One, Some("globalrole")),
+                ForeignKey::new("role", None::<&str>, ForeignKeyType::One, Some(KIND_GLOBAL_ROLE)),
                 ForeignKey::new(
                     "subjects",
                     None::<&str>,
                     ForeignKeyType::OneOrMany,
-                    Some("serviceaccount"),
+                    Some(KIND_SERVICE_ACCOUNT),
                 ),
             ],
         ),
@@ -70,10 +77,10 @@ pub fn schemas() -> Vec<SchemaDefinition> {
 async fn seed_system_namespace<B: DawnstoreBackend>(backend: &B) -> Result<(), DawnStoreError> {
     backend
         .apply(Object {
-            api_version: Some("v1".to_string()),
-            kind: Some("namespace".to_string()),
-            namespace: Some("system".to_string()),
-            name: "system".to_string(),
+            api_version: Some(API_VERSION_V1.to_string()),
+            kind: Some(KIND_NAMESPACE.to_string()),
+            namespace: Some(SYSTEM_NAMESPACE.to_string()),
+            name: SYSTEM_NAMESPACE.to_string(),
             spec: Namespace {},
             id: None,
             created_at: None,
@@ -88,10 +95,10 @@ async fn seed_system_namespace<B: DawnstoreBackend>(backend: &B) -> Result<(), D
 async fn seed_superadmin<B: DawnstoreBackend>(backend: &B) -> Result<(), DawnStoreError> {
     backend
         .apply(Object {
-            api_version: Some("v1".to_string()),
-            kind: Some("serviceaccount".to_string()),
-            namespace: Some("system".to_string()),
-            name: "superadmin".to_string(),
+            api_version: Some(API_VERSION_V1.to_string()),
+            kind: Some(KIND_SERVICE_ACCOUNT.to_string()),
+            namespace: Some(SYSTEM_NAMESPACE.to_string()),
+            name: SA_SUPERADMIN.to_string(),
             spec: ServiceAccount {},
             id: None,
             created_at: None,
@@ -126,9 +133,9 @@ pub async fn bootstrap<B: DawnstoreBackend>(
 ) -> Result<Option<String>, DawnStoreError> {
     let existing = backend
         .get(&GetObjectsFilter {
-            namespace: Some("system".to_string()),
-            kind: Some("serviceaccounttoken".to_string()),
-            name: Some("bootstrap".to_string()),
+            namespace: Some(SYSTEM_NAMESPACE.to_string()),
+            kind: Some(KIND_SERVICE_ACCOUNT_TOKEN.to_string()),
+            name: Some(TOKEN_BOOTSTRAP.to_string()),
             ..Default::default()
         })
         .await?;
@@ -141,12 +148,12 @@ pub async fn bootstrap<B: DawnstoreBackend>(
 
     let result = backend
         .apply(Object {
-            api_version: Some("v1".to_string()),
-            kind: Some("serviceaccounttoken".to_string()),
-            namespace: Some("system".to_string()),
-            name: "bootstrap".to_string(),
+            api_version: Some(API_VERSION_V1.to_string()),
+            kind: Some(KIND_SERVICE_ACCOUNT_TOKEN.to_string()),
+            namespace: Some(SYSTEM_NAMESPACE.to_string()),
+            name: TOKEN_BOOTSTRAP.to_string(),
             spec: ServiceAccountToken {
-                service_account: "system/serviceaccount/superadmin".to_string(),
+                service_account: object_string_id(SYSTEM_NAMESPACE, KIND_SERVICE_ACCOUNT, SA_SUPERADMIN),
                 expires_at: Some(expires_at),
             },
             id: None,
@@ -163,9 +170,9 @@ pub async fn bootstrap<B: DawnstoreBackend>(
         .id;
 
     let token = jwt_service::create_token(
-        "superadmin",
-        "system",
-        "bootstrap",
+        SA_SUPERADMIN,
+        SYSTEM_NAMESPACE,
+        TOKEN_BOOTSTRAP,
         token_id,
         expires_at,
         private_key_pem,
