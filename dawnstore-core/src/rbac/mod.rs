@@ -1,5 +1,9 @@
+pub mod jwt_service;
+pub mod middleware;
 pub mod models;
 
+use axum::{Router, middleware::from_fn_with_state};
+use middleware::{JwtAuthState, jwt_auth_middleware};
 use models::*;
 use crate::abstractions::{DawnstoreBackend, ForeignKey, ForeignKeyType, Object, SchemaDefinition};
 use crate::error::DawnStoreError;
@@ -64,4 +68,12 @@ async fn seed_superadmin<B: DawnstoreBackend>(backend: &B) -> Result<(), DawnSto
 pub async fn init<B: DawnstoreBackend>(backend: &B) -> Result<(), DawnStoreError> {
     backend.seed_schema(&schemas()).await?;
     seed_superadmin(backend).await
+}
+
+/// Wrap `router` with JWT authentication middleware.
+///
+/// `public_key_pem` is the PEM-encoded EC public key used to verify tokens.
+pub fn with_jwt_auth(router: Router, public_key_pem: Vec<u8>) -> Router {
+    let state = JwtAuthState { public_key_pem };
+    router.layer(from_fn_with_state(state, jwt_auth_middleware))
 }

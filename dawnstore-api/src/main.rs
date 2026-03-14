@@ -37,8 +37,13 @@ async fn main() -> eyre::Result<()> {
 
     let backend = Arc::new(backend);
 
+    let public_key_pem = std::env::var("JWT_PUBLIC_KEY")?.into_bytes();
+
     let dawnstore_routes = get_dawnstore_default_routes(backend);
-    let app = Router::new().merge(dawnstore_routes);
+    let app = dawnstore_core::rbac::with_jwt_auth(
+        Router::new().merge(dawnstore_routes),
+        public_key_pem,
+    );
 
     let listener = TcpListener::bind("::0:8080").await.unwrap();
     tracing::info!("listening on {}", listener.local_addr().unwrap());

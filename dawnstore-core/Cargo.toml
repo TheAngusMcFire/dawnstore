@@ -6,10 +6,14 @@ edition = "2024"
 [dependencies]
 axum.workspace = true
 chrono.workspace = true
+uuid.workspace = true
 thiserror.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 schemars.workspace = true
 jsonschema.workspace = true
+jsonwebtoken.workspace = true
+p384.workspace = true
+rand_core.workspace = true
 sqlx.workspace = true
 dawnstore-lib = { path = "../dawnstore-lib" }

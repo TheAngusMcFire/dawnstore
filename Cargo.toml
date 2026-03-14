@@ -16,6 +16,9 @@ axum = { version = "0.8" }
 tracing = { version = "0" }
 schemars = { version = "1.2.0", features = ["chrono04", "uuid1"] }
 jsonschema = { version = "0.38" }
+jsonwebtoken = { version = "9" }
+p384 = { version = "0.13", features = ["pkcs8", "pem"] }
+rand_core = { version = "0.6", features = ["getrandom"] }
 sqlx = { version = "0.8", features = [
   "postgres",
   "runtime-tokio",
