@@ -108,9 +108,26 @@ impl SchemaDefinition {
     }
 }
 
+// ── NewDawnStoreBackend shared types ─────────────────────────────────────────
+
+/// A single FK edge produced by the apply handler's FK graph walk.
+///
+/// Stored in the `relations` table so that `get` can fill navigation properties
+/// (e.g. `parent_object`) without extra queries.
+pub struct ObjectRelation {
+    /// String ID of the object that declares the FK (`namespace/kind/name`).
+    pub object_string_id: String,
+    /// UUID of the FK constraint definition — used as the primary key in the
+    /// `relations` table together with `object_string_id` + `target_string_id`.
+    pub fk_constraint_id: Uuid,
+    /// String ID of the FK-referenced target (`namespace/kind/name`).
+    pub target_string_id: String,
+}
+
 // ── NewDawnStoreBackend raw data types ────────────────────────────────────────
 
 /// A raw schema entry as returned by the backend — used to populate the schema cache.
+#[derive(Clone)]
 pub struct RawSchema {
     pub api_version: String,
     pub kind: String,
@@ -119,6 +136,7 @@ pub struct RawSchema {
 }
 
 /// A raw foreign key constraint as returned by the backend — used to populate the FK cache.
+#[derive(Clone)]
 pub struct RawForeignKeyConstraint {
     pub id: Uuid,
     pub api_version: String,
@@ -135,12 +153,16 @@ pub struct RawForeignKeyConstraint {
 /// Filter type used by [`NewDawnStoreBackend::get_objects`].
 ///
 /// A focused alternative to [`GetObjectsFilter`] that only exposes the fields
-/// needed by the cache initialisation routines.
+/// needed by the cache initialisation routines and the get handler.
 #[derive(Debug, Clone, Default)]
 pub struct BackendGetObjectsFilter {
     pub namespace: Option<String>,
     pub kind: Option<String>,
     pub name: Option<String>,
+    /// RBAC constraint injected by the get handler.
+    /// `None` = unrestricted (superadmin / unauthenticated path).
+    /// `Some([])` = deny all (caller has no matching Get grants).
+    pub allowed: Option<Vec<AllowedScope>>,
 }
 
 /// Placeholder backend trait used during the cache-layer refactor.
@@ -165,6 +187,40 @@ pub trait NewDawnStoreBackend: Send + Sync {
         &self,
         filter: &BackendGetObjectsFilter,
     ) -> impl Future<Output = Result<Vec<ReturnObject<serde_json::Value>>, DawnStoreError>> + Send;
+
+    /// Fetch a single object by its identity triple. Returns `None` if no object
+    /// with that `(namespace, kind, name)` exists. Used by the apply handler's FK
+    /// graph walk to verify existence of referenced objects.
+    fn get_object(
+        &self,
+        namespace: &str,
+        kind: &str,
+        name: &str,
+    ) -> impl Future<Output = Result<Option<ReturnObject<serde_json::Value>>, DawnStoreError>> + Send;
+
+    /// Persist `objects` and reconcile their FK `relations` in a single transaction.
+    ///
+    /// For each object: if a record with the same string ID already exists, update
+    /// it (preserving its UUID and `created_at`); otherwise insert a new record.
+    /// After upserting objects, delete any existing relation rows for those objects
+    /// that are absent from `relations`, then insert the new relation set.
+    ///
+    /// Returns the upserted objects as [`ReturnObject`]s.
+    fn upsert_objects(
+        &self,
+        objects: Vec<ObjectAny>,
+        relations: Vec<ObjectRelation>,
+    ) -> impl Future<Output = Result<Vec<ReturnObject<serde_json::Value>>, DawnStoreError>> + Send;
+
+    /// Delete the object identified by `(namespace, kind, name)`.
+    ///
+    /// Returns `Ok(())` whether or not the object existed (idempotent).
+    fn delete_object(
+        &self,
+        namespace: &str,
+        kind: &str,
+        name: &str,
+    ) -> impl Future<Output = Result<(), DawnStoreError>> + Send;
 }
 
 // ── DawnstoreBackend trait ────────────────────────────────────────────────────

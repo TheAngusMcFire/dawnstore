@@ -24,12 +24,15 @@ struct PermissionState {
 
 // ── DawnstoreCache ────────────────────────────────────────────────────────────
 
-/// Unified cache for schema validators, foreign key constraints, and RBAC permissions.
+/// Unified cache for schema validators, foreign key constraints, RBAC permissions,
+/// and kind-alias resolution.
 #[derive(Default)]
 pub struct DawnstoreCache {
     schema: TokioRwLock<HashMap<String, Arc<jsonschema::Validator>>>,
     foreign_key: TokioRwLock<HashMap<String, Arc<Vec<RawForeignKeyConstraint>>>>,
     permission: RwLock<PermissionState>,
+    /// Maps every registered alias (and canonical kind name) → canonical kind name.
+    kind_alias: TokioRwLock<HashMap<String, String>>,
 }
 
 impl DawnstoreCache {
@@ -45,17 +48,25 @@ impl DawnstoreCache {
     }
 
     /// Populate the schema cache from all schemas returned by `backend`.
+    /// Also populates the kind-alias map so that alias resolution is available
+    /// immediately after schema initialisation.
     pub async fn init_schema<B: NewDawnStoreBackend>(
         &self,
         backend: &B,
     ) -> Result<(), DawnStoreError> {
         let schemas = backend.load_all_schemas().await?;
         let mut cache = self.schema.write().await;
+        let mut aliases = self.kind_alias.write().await;
         for schema in schemas {
             let key = schema_cache_key(&schema.api_version, &schema.kind);
             let value: serde_json::Value = serde_json::from_str(&schema.json_schema)?;
             let validator = Arc::new(jsonschema::validator_for(&value)?);
             cache.insert(key, validator);
+            // Register the canonical kind and all its aliases.
+            aliases.insert(schema.kind.clone(), schema.kind.clone());
+            for alias in &schema.aliases {
+                aliases.insert(alias.clone(), schema.kind.clone());
+            }
         }
         Ok(())
     }
@@ -88,6 +99,15 @@ impl DawnstoreCache {
         state.permissions = permissions;
         state.resource_index = resource_index;
         Ok(())
+    }
+
+    // ── Kind-alias resolution ─────────────────────────────────────────────────
+
+    /// Resolve `kind_or_alias` to the canonical kind name.
+    /// Returns `Some(canonical_kind)` if the alias (or exact kind) is registered,
+    /// or `None` if it has never been seen.
+    pub async fn resolve_kind(&self, kind_or_alias: &str) -> Option<String> {
+        self.kind_alias.read().await.get(kind_or_alias).cloned()
     }
 
     // ── Schema cache access ───────────────────────────────────────────────────

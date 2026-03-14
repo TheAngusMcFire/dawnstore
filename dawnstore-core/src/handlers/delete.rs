@@ -1,0 +1,120 @@
+use dawnstore_lib::DeleteObject;
+
+use crate::abstractions::NewDawnStoreBackend;
+use crate::cache::DawnstoreCache;
+use crate::error::DawnStoreError;
+use crate::rbac::authz_service::is_superadmin;
+use crate::rbac::cache::{EffectivePermissions, Verb};
+use crate::rbac::constants::{
+    KIND_GLOBAL_ROLE, KIND_GLOBAL_ROLE_BINDING, KIND_ROLE, KIND_ROLE_BINDING,
+};
+use crate::rbac::helpers::object_string_id;
+use crate::rbac::middleware::Claims;
+
+// ── Private helpers ───────────────────────────────────────────────────────────
+
+/// Resolve `kind` to its canonical name through the alias cache.
+///
+/// Returns [`DawnStoreError::UnknownResourceKind`] when the alias is not registered.
+async fn resolve_kind(cache: &DawnstoreCache, kind: &str) -> Result<String, DawnStoreError> {
+    cache
+        .resolve_kind(kind)
+        .await
+        .ok_or_else(|| DawnStoreError::UnknownResourceKind(kind.to_string()))
+}
+
+/// Load the effective permissions for `caller` from the cache, rebuilding from
+/// `backend` on a miss.
+async fn get_or_load_permissions<B: NewDawnStoreBackend>(
+    cache: &DawnstoreCache,
+    backend: &B,
+    caller: &Claims,
+) -> Result<EffectivePermissions, DawnStoreError> {
+    if let Some(perms) = cache.get_permissions(&caller.namespace, &caller.sub) {
+        return Ok(perms);
+    }
+    cache.init_permission(backend).await?;
+    Ok(cache.get_permissions(&caller.namespace, &caller.sub).unwrap_or_default())
+}
+
+/// Verify that `caller` holds `Delete` permission on `(namespace, kind, name)`.
+///
+/// When `caller` is `None` (unauthenticated / superadmin path) or the caller is
+/// the system superadmin SA, the check is skipped and `Ok(())` is returned.
+/// Returns [`DawnStoreError::Forbidden`] if the caller lacks the required permission.
+async fn check_delete_permission<B: NewDawnStoreBackend>(
+    cache: &DawnstoreCache,
+    backend: &B,
+    caller: Option<&Claims>,
+    _namespace: &str,
+    kind: &str,
+    name: &str,
+) -> Result<(), DawnStoreError> {
+    let Some(caller) = caller else {
+        return Ok(()); // unauthenticated / superadmin path
+    };
+    if is_superadmin(caller) {
+        return Ok(());
+    }
+
+    let perms = get_or_load_permissions(cache, backend, caller).await?;
+    let allowed = perms
+        .namespaced
+        .iter()
+        .chain(perms.global.iter())
+        .any(|scope| {
+            scope.verbs.contains(&Verb::Delete)
+                && scope.kinds.iter().any(|k| k == "*" || k == kind)
+                && scope.names.as_ref().map_or(true, |names| names.iter().any(|n| n == name))
+        });
+
+    if allowed {
+        Ok(())
+    } else {
+        Err(DawnStoreError::Forbidden)
+    }
+}
+
+/// Returns `true` if `kind` is an RBAC resource whose deletion must trigger
+/// permission-cache invalidation.
+fn is_rbac_kind(kind: &str) -> bool {
+    matches!(kind, KIND_ROLE | KIND_GLOBAL_ROLE | KIND_ROLE_BINDING | KIND_GLOBAL_ROLE_BINDING)
+}
+
+// ── Public API ────────────────────────────────────────────────────────────────
+
+/// Delete the object identified by `request`, enforcing RBAC for authenticated callers.
+///
+/// Steps:
+/// 1. Resolve `request.kind` through the kind-alias cache.
+///    Returns [`DawnStoreError::UnknownResourceKind`] if the alias is not registered.
+/// 2. If `caller` is authenticated (and is not the system superadmin), verify that
+///    the caller holds `Delete` permission on `(namespace, kind, name)`.
+///    Returns [`DawnStoreError::Forbidden`] if denied.
+/// 3. Delete the object from the backend (idempotent — no error if it doesn't exist).
+/// 4. If the deleted object is an RBAC resource (`Role`, `RoleBinding`, `GlobalRole`,
+///    or `GlobalRoleBinding`), evict all permission-cache entries derived from it so
+///    that downstream Get / Apply checks reflect the change immediately.
+pub async fn delete<B: NewDawnStoreBackend>(
+    backend: &B,
+    cache: &DawnstoreCache,
+    caller: Option<&Claims>,
+    request: DeleteObject,
+) -> Result<(), DawnStoreError> {
+    // Step 1: resolve kind alias.
+    let kind = resolve_kind(cache, &request.kind).await?;
+    let namespace = request.namespace.as_deref().unwrap_or("default");
+
+    // Step 2: permission check.
+    check_delete_permission(cache, backend, caller, namespace, &kind, &request.name).await?;
+
+    // Step 3: delete from backend.
+    backend.delete_object(namespace, &kind, &request.name).await?;
+
+    // Step 4: invalidate RBAC cache for deleted RBAC resources.
+    if is_rbac_kind(&kind) {
+        cache.invalidate_permissions(&object_string_id(namespace, &kind, &request.name));
+    }
+
+    Ok(())
+}
