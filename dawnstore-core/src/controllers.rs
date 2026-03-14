@@ -28,9 +28,15 @@ where
         .route("/apply", post(apply::<B>))
         .route("/get-objects", post(get_objects::<B>))
         .route("/get-object-infos", post(get_object_infos::<B>))
-        .route("/get-resource-definitions", post(get_resource_definitions::<B>))
+        .route(
+            "/get-resource-definitions",
+            post(get_resource_definitions::<B>),
+        )
         .route("/delete-object", delete(delete_object::<B>))
-        .with_state(ApiState { backend, rbac_cache })
+        .with_state(ApiState {
+            backend,
+            rbac_cache,
+        })
 }
 
 struct ApiState<B> {
@@ -53,48 +59,65 @@ impl<B> Clone for ApiState<B> {
 /// Database internals, stack traces, and other sensitive details are stripped.
 fn to_api_error(err: DawnStoreError) -> DawnStoreApiError {
     match err {
-        DawnStoreError::UnknownResourceKind(kind) => DawnStoreApiError::UnknownResourceKind { kind },
+        DawnStoreError::UnknownResourceKind(kind) => {
+            DawnStoreApiError::UnknownResourceKind { kind }
+        }
         DawnStoreError::NamespaceCanOnlyBeCreatedInSystemNamespace(namespace) => {
             DawnStoreApiError::NamespaceRestriction { namespace }
         }
         DawnStoreError::NoSchemaForObjectFound { api_version, kind } => {
             DawnStoreApiError::SchemaNotFound { api_version, kind }
         }
-        DawnStoreError::ObjectValidationError { name, validation_error, .. } => {
-            DawnStoreApiError::ValidationError { name, message: validation_error.to_string() }
-        }
-        DawnStoreError::ObjectValidationMissingForeignKeyEntry { name, foreign_key_path, .. } => {
-            DawnStoreApiError::ValidationError {
-                name,
-                message: format!("missing required foreign key field: {foreign_key_path}"),
-            }
-        }
-        DawnStoreError::ObjectValidationWrongForeignKeyEntryFormat { name, foreign_key_path, value, .. } => {
-            DawnStoreApiError::ValidationError {
-                name,
-                message: format!("invalid foreign key format at '{foreign_key_path}': {value}"),
-            }
-        }
-        DawnStoreError::ObjectValidationWrongForeignKeyEntryKind { name, foreign_key_path, value, .. } => {
-            DawnStoreApiError::ValidationError {
-                name,
-                message: format!("wrong foreign key kind at '{foreign_key_path}': {value}"),
-            }
-        }
+        DawnStoreError::ObjectValidationError {
+            name,
+            validation_error,
+            ..
+        } => DawnStoreApiError::ValidationError {
+            name,
+            message: validation_error.to_string(),
+        },
+        DawnStoreError::ObjectValidationMissingForeignKeyEntry {
+            name,
+            foreign_key_path,
+            ..
+        } => DawnStoreApiError::ValidationError {
+            name,
+            message: format!("missing required foreign key field: {foreign_key_path}"),
+        },
+        DawnStoreError::ObjectValidationWrongForeignKeyEntryFormat {
+            name,
+            foreign_key_path,
+            value,
+            ..
+        } => DawnStoreApiError::ValidationError {
+            name,
+            message: format!("invalid foreign key format at '{foreign_key_path}': {value}"),
+        },
+        DawnStoreError::ObjectValidationWrongForeignKeyEntryKind {
+            name,
+            foreign_key_path,
+            value,
+            ..
+        } => DawnStoreApiError::ValidationError {
+            name,
+            message: format!("wrong foreign key kind at '{foreign_key_path}': {value}"),
+        },
         DawnStoreError::ObjectValidationForeignKeyNotFound { value, .. } => {
             DawnStoreApiError::ForeignKeyNotFound { value }
         }
-        DawnStoreError::ForeignKeyNotFound(value) => DawnStoreApiError::ForeignKeyNotFound { value },
+        DawnStoreError::ForeignKeyNotFound(value) => {
+            DawnStoreApiError::ForeignKeyNotFound { value }
+        }
         DawnStoreError::InvalidRootInputObject
         | DawnStoreError::InvalidInputObjectMissingKindField
         | DawnStoreError::InvalidInputObjectMissingListFieldOfList
         | DawnStoreError::KindMissingInObject
-        | DawnStoreError::ApiVersionMissingInObject => {
-            DawnStoreApiError::InvalidInput { message: err.to_string() }
-        }
-        DawnStoreError::DeserialisationError(e) => {
-            DawnStoreApiError::InvalidInput { message: e.to_string() }
-        }
+        | DawnStoreError::ApiVersionMissingInObject => DawnStoreApiError::InvalidInput {
+            message: err.to_string(),
+        },
+        DawnStoreError::DeserialisationError(e) => DawnStoreApiError::InvalidInput {
+            message: e.to_string(),
+        },
         DawnStoreError::Forbidden => DawnStoreApiError::Forbidden,
         // Internal errors: do not leak details to the client.
         DawnStoreError::DatabaseError(_)
@@ -111,23 +134,25 @@ fn check_namespace_restriction<B: DawnstoreBackend>(
     backend: &B,
     value: &serde_json::Value,
 ) -> Result<(), DawnStoreError> {
-    let objects: Vec<&serde_json::Value> =
-        if let Some(arr) = value.as_array() {
-            arr.iter().collect()
-        } else if value.get("kind").and_then(|k| k.as_str()) == Some("list") {
-            value
-                .get("list")
-                .and_then(|l| l.as_array())
-                .map(|a| a.iter().collect())
-                .unwrap_or_default()
-        } else {
-            vec![value]
-        };
+    let objects: Vec<&serde_json::Value> = if let Some(arr) = value.as_array() {
+        arr.iter().collect()
+    } else if value.get("kind").and_then(|k| k.as_str()) == Some("list") {
+        value
+            .get("list")
+            .and_then(|l| l.as_array())
+            .map(|a| a.iter().collect())
+            .unwrap_or_default()
+    } else {
+        vec![value]
+    };
 
     for obj in objects {
         let kind = obj.get("kind").and_then(|k| k.as_str()).unwrap_or("");
         if backend.resolve_kind(kind) == KIND_NAMESPACE {
-            let ns = obj.get("namespace").and_then(|n| n.as_str()).unwrap_or("default");
+            let ns = obj
+                .get("namespace")
+                .and_then(|n| n.as_str())
+                .unwrap_or("default");
             if ns != SYSTEM_NAMESPACE {
                 return Err(DawnStoreError::NamespaceCanOnlyBeCreatedInSystemNamespace(
                     ns.to_string(),
@@ -141,18 +166,17 @@ fn check_namespace_restriction<B: DawnstoreBackend>(
 /// Extract `(namespace, kind, name)` from every object in the payload.
 /// Used by the apply handler to check RBAC before touching the DB.
 fn extract_apply_identities(value: &serde_json::Value) -> Vec<(String, String, String)> {
-    let objects: Vec<&serde_json::Value> =
-        if let Some(arr) = value.as_array() {
-            arr.iter().collect()
-        } else if value.get("kind").and_then(|k| k.as_str()) == Some("list") {
-            value
-                .get("list")
-                .and_then(|l| l.as_array())
-                .map(|a| a.iter().collect())
-                .unwrap_or_default()
-        } else {
-            vec![value]
-        };
+    let objects: Vec<&serde_json::Value> = if let Some(arr) = value.as_array() {
+        arr.iter().collect()
+    } else if value.get("kind").and_then(|k| k.as_str()) == Some("list") {
+        value
+            .get("list")
+            .and_then(|l| l.as_array())
+            .map(|a| a.iter().collect())
+            .unwrap_or_default()
+    } else {
+        vec![value]
+    };
 
     objects
         .into_iter()
@@ -172,16 +196,19 @@ fn extract_apply_identities(value: &serde_json::Value) -> Vec<(String, String, S
 /// Returns `true` if `kind` is an RBAC resource whose change should trigger
 /// cache invalidation.
 fn is_rbac_kind(kind: &str) -> bool {
-    matches!(kind, KIND_ROLE | KIND_GLOBAL_ROLE | KIND_ROLE_BINDING | KIND_GLOBAL_ROLE_BINDING)
+    matches!(
+        kind,
+        KIND_ROLE | KIND_GLOBAL_ROLE | KIND_ROLE_BINDING | KIND_GLOBAL_ROLE_BINDING
+    )
 }
 
 // ── Response helpers ──────────────────────────────────────────────────────────
 
-fn ok<T: serde::Serialize>(data: T) -> Response {
+pub fn ok<T: serde::Serialize>(data: T) -> Response {
     Json(DawnStoreResponse::ok(data)).into_response()
 }
 
-fn api_err(err: DawnStoreError) -> Response {
+pub fn api_err(err: DawnStoreError) -> Response {
     Json(DawnStoreResponse::<()>::err(to_api_error(err))).into_response()
 }
 
@@ -229,13 +256,16 @@ where
 
             // Check the caller has Get access to every FK-referenced object.
             // We resolve the api_version from the object payload; fall back to wildcard.
-            let api_version = obj.get("api_version")
+            let api_version = obj
+                .get("api_version")
                 .or_else(|| {
                     // Array/list: find the matching object and read its api_version.
                     obj.as_array()
-                        .and_then(|arr| arr.iter().find(|o| {
-                            o.get("name").and_then(|n| n.as_str()) == Some(name.as_str())
-                        }))
+                        .and_then(|arr| {
+                            arr.iter().find(|o| {
+                                o.get("name").and_then(|n| n.as_str()) == Some(name.as_str())
+                            })
+                        })
                         .and_then(|o| o.get("api_version"))
                 })
                 .and_then(|v| v.as_str())
@@ -244,16 +274,21 @@ where
             // Extract the spec from the appropriate object in the payload.
             let spec_owner = if obj.is_array() {
                 obj.as_array()
-                    .and_then(|arr| arr.iter().find(|o| {
-                        o.get("name").and_then(|n| n.as_str()) == Some(name.as_str())
-                    }))
+                    .and_then(|arr| {
+                        arr.iter()
+                            .find(|o| o.get("name").and_then(|n| n.as_str()) == Some(name.as_str()))
+                    })
                     .cloned()
                     .unwrap_or(serde_json::Value::Null)
             } else {
                 obj.clone()
             };
 
-            let fk_refs = match state.backend.get_fk_refs(api_version, &resolved_kind, &spec_owner, &ns).await {
+            let fk_refs = match state
+                .backend
+                .get_fk_refs(api_version, &resolved_kind, &spec_owner, &ns)
+                .await
+            {
                 Ok(refs) => refs,
                 Err(e) => return api_err(e),
             };
@@ -288,7 +323,11 @@ where
             // Invalidate RBAC cache for any applied RBAC resources.
             for obj in &applied {
                 if is_rbac_kind(&obj.kind) {
-                    state.rbac_cache.invalidate(&object_string_id(&obj.namespace, &obj.kind, &obj.name));
+                    state.rbac_cache.invalidate(&object_string_id(
+                        &obj.namespace,
+                        &obj.kind,
+                        &obj.name,
+                    ));
                 }
             }
             ok(applied)
@@ -319,13 +358,8 @@ where
 
     // RBAC: restrict results to what the caller may read (when JWT auth is active).
     if let Some(Extension(claims)) = &claims_ext {
-        match authz_service::allowed_scopes(
-            &state.rbac_cache,
-            &*state.backend,
-            claims,
-            Verb::Get,
-        )
-        .await
+        match authz_service::allowed_scopes(&state.rbac_cache, &*state.backend, claims, Verb::Get)
+            .await
         {
             Ok(allowed) => query.allowed = allowed,
             Err(e) => return api_err(e),
@@ -360,13 +394,8 @@ where
 
     // RBAC: restrict results to what the caller may read (when JWT auth is active).
     if let Some(Extension(claims)) = &claims_ext {
-        match authz_service::allowed_scopes(
-            &state.rbac_cache,
-            &*state.backend,
-            claims,
-            Verb::Get,
-        )
-        .await
+        match authz_service::allowed_scopes(&state.rbac_cache, &*state.backend, claims, Verb::Get)
+            .await
         {
             Ok(allowed) => query.allowed = allowed,
             Err(e) => return api_err(e),
@@ -425,7 +454,9 @@ where
             // Invalidate RBAC cache for deleted RBAC resources.
             if is_rbac_kind(&resolved_kind) {
                 let ns = query.namespace.as_deref().unwrap_or("default");
-                state.rbac_cache.invalidate(&object_string_id(ns, &resolved_kind, &query.name));
+                state
+                    .rbac_cache
+                    .invalidate(&object_string_id(ns, &resolved_kind, &query.name));
             }
             ok(true)
         }

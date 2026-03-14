@@ -32,7 +32,11 @@ impl Api {
         if base_url.ends_with("/") {
             panic!("url can not end with /");
         }
-        Self { base_url, client: Client::new(), token }
+        Self {
+            base_url,
+            client: Client::new(),
+            token,
+        }
     }
 
     pub fn get_client(&self) -> &Client {
@@ -56,7 +60,10 @@ impl Api {
         filter: &GetResourceDefinitionFilter,
     ) -> Result<Vec<ResourceDefinition>, DawnstoreApiError> {
         let resp = self
-            .request(Method::POST, format!("{}/get-resource-definitions", self.base_url))
+            .request(
+                Method::POST,
+                format!("{}/get-resource-definitions", self.base_url),
+            )
             .json(filter)
             .send()
             .await?;
@@ -94,6 +101,18 @@ impl Api {
         let resp = self
             .request(Method::POST, format!("{}/get-object-infos", self.base_url))
             .json(filter)
+            .send()
+            .await?;
+        envelope(resp).await
+    }
+
+    pub async fn create_service_account_token(
+        &self,
+        req: &IssueTokenRequest,
+    ) -> Result<IssueTokenResponse, DawnstoreApiError> {
+        let resp = self
+            .request(Method::POST, format!("{}/rbac/issue-token", self.base_url))
+            .json(req)
             .send()
             .await?;
         envelope(resp).await
@@ -141,16 +160,21 @@ impl Api {
 /// [`DawnstoreApiError::HttpError`] without attempting JSON parsing.
 /// 200 responses are parsed as the envelope and the inner error (if any)
 /// is returned as [`DawnstoreApiError::ServerError`].
-async fn envelope<T: DeserializeOwned>(
-    resp: reqwest::Response,
-) -> Result<T, DawnstoreApiError> {
+async fn envelope<T: DeserializeOwned>(resp: reqwest::Response) -> Result<T, DawnstoreApiError> {
     if !resp.status().is_success() {
-        return Err(DawnstoreApiError::HttpError(resp.status(), resp.text().await?));
+        return Err(DawnstoreApiError::HttpError(
+            resp.status(),
+            resp.text().await?,
+        ));
     }
     let wrapped: DawnStoreResponse<T> = resp.json().await?;
     match wrapped {
-        DawnStoreResponse { data: Some(data), .. } => Ok(data),
-        DawnStoreResponse { error: Some(err), .. } => Err(DawnstoreApiError::ServerError(err)),
+        DawnStoreResponse {
+            data: Some(data), ..
+        } => Ok(data),
+        DawnStoreResponse {
+            error: Some(err), ..
+        } => Err(DawnstoreApiError::ServerError(err)),
         _ => Err(DawnstoreApiError::HttpError(
             reqwest::StatusCode::OK,
             "server returned an empty response".to_string(),

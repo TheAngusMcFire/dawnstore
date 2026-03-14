@@ -31,10 +31,16 @@ pub struct DawnStoreResponse<T> {
 
 impl<T> DawnStoreResponse<T> {
     pub fn ok(data: T) -> Self {
-        Self { data: Some(data), error: None }
+        Self {
+            data: Some(data),
+            error: None,
+        }
     }
     pub fn err(error: DawnStoreApiError) -> Self {
-        Self { data: None, error: Some(error) }
+        Self {
+            data: None,
+            error: Some(error),
+        }
     }
 }
 
@@ -182,4 +188,25 @@ pub struct GetObjectInfosFilter {
     /// RBAC constraint — same semantics as [`GetObjectsFilter::allowed`].
     #[serde(skip)]
     pub allowed: Option<Vec<AllowedScope>>,
+}
+
+// ── Request / response ────────────────────────────────────────────────────────
+
+#[derive(serde::Deserialize, serde::Serialize)]
+pub struct IssueTokenRequest {
+    /// Namespace of the target service account.
+    pub namespace: String,
+    /// Name of the target service account.
+    pub service_account: String,
+    /// A human-readable name for this token (also used as the dawnstore object name).
+    pub token_name: String,
+    /// Optional expiry. `None` defaults to 1 year from now.
+    pub expires_at: Option<DateTime<Utc>>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct IssueTokenResponse {
+    pub token: String,
+    pub token_id: Uuid,
+    pub expires_at: DateTime<Utc>,
 }

@@ -1,7 +1,7 @@
 use jsonschema::ValidationError;
 use thiserror::Error;
 
-use crate::abstractions::ForeignKeyType;
+use crate::{abstractions::ForeignKeyType, rbac::jwt_service::JwtError};
 
 #[derive(Error, Debug)]
 pub enum DawnStoreError {
@@ -76,7 +76,11 @@ pub enum DawnStoreError {
     },
     #[error("Unknown resource kind: {0}")]
     UnknownResourceKind(String),
-    #[error("Namespace objects can only be created in the 'system' namespace, got namespace: '{0}'")]
+    #[error("Error handling jwt: {0}")]
+    JwtError(JwtError),
+    #[error(
+        "Namespace objects can only be created in the 'system' namespace, got namespace: '{0}'"
+    )]
     NamespaceCanOnlyBeCreatedInSystemNamespace(String),
     #[error("Forbidden")]
     Forbidden,
