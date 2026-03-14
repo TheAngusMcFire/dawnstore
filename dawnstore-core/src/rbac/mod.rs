@@ -5,7 +5,6 @@ pub mod helpers;
 pub mod jwt_service;
 pub mod middleware;
 pub mod models;
-mod token_controller;
 
 pub use cache::RbacCache;
 pub use constants::*;
@@ -192,7 +191,7 @@ pub fn get_rbac_routes<B: DawnstoreBackend + 'static>(
     backend: Arc<B>,
     private_key_pem: Vec<u8>,
 ) -> Router {
-    token_controller::routes(token_controller::TokenState { backend, private_key_pem })
+    crate::controllers::get_rbac_token_routes(backend, private_key_pem)
 }
 
 /// Wrap `router` with JWT authentication middleware.

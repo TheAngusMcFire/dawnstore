@@ -102,10 +102,16 @@ async fn main() -> color_eyre::Result<()> {
                 );
             }
         }
-        args::Commands::Delete {
-            resource: _,
-            item_name: _,
-        } => todo!(),
+        args::Commands::Delete { resource, item_name } => {
+            api.delete_object(&DeleteObject {
+                namespace: Some(ns.to_string()),
+                kind: resource.clone(),
+                name: item_name.clone(),
+            })
+            .await
+            .map_err(api_err)?;
+            println!("deleted {resource}/{item_name}");
+        }
         args::Commands::Edit {
             resource,
             item_name,

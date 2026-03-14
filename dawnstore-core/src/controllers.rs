@@ -7,17 +7,20 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{delete, post},
 };
+use chrono::{Duration, Utc};
 use dawnstore_lib::*;
 
-use crate::abstractions::{DawnstoreBackend, NewDawnStoreBackend};
+use crate::abstractions::{DawnstoreBackend, NewDawnStoreBackend, Object};
 use crate::cache::DawnstoreCache;
 use crate::error::DawnStoreError;
 use crate::rbac::authz_service;
 use crate::rbac::cache::{RbacCache, Verb};
 use crate::rbac::constants::{
-    KIND_GLOBAL_ROLE, KIND_GLOBAL_ROLE_BINDING, KIND_NAMESPACE, KIND_ROLE, KIND_ROLE_BINDING,
-    SYSTEM_NAMESPACE,
+    API_VERSION_V1, KIND_GLOBAL_ROLE, KIND_GLOBAL_ROLE_BINDING, KIND_NAMESPACE, KIND_ROLE,
+    KIND_ROLE_BINDING, KIND_SERVICE_ACCOUNT, KIND_SERVICE_ACCOUNT_TOKEN, SYSTEM_NAMESPACE,
 };
+use crate::rbac::models::ServiceAccountToken;
+use crate::rbac::{authz_service::is_superadmin, jwt_service};
 use crate::rbac::helpers::object_string_id;
 use crate::rbac::middleware::Claims;
 use crate::{handlers::apply, handlers::delete as delete_handler, handlers::get as get_handler};
@@ -596,4 +599,89 @@ where
         Ok(x) => ok(x),
         Err(e) => api_err(e),
     }
+}
+
+// ── Token controller ──────────────────────────────────────────────────────────
+
+struct TokenState<B> {
+    backend: Arc<B>,
+    private_key_pem: Vec<u8>,
+}
+
+impl<B> Clone for TokenState<B> {
+    fn clone(&self) -> Self {
+        Self {
+            backend: Arc::clone(&self.backend),
+            private_key_pem: self.private_key_pem.clone(),
+        }
+    }
+}
+
+pub fn get_rbac_token_routes<B: DawnstoreBackend + 'static>(
+    backend: Arc<B>,
+    private_key_pem: Vec<u8>,
+) -> Router {
+    Router::new()
+        .route("/rbac/issue-token", post(issue_token::<B>))
+        .with_state(TokenState { backend, private_key_pem })
+}
+
+async fn issue_token<B: DawnstoreBackend + 'static>(
+    State(state): State<TokenState<B>>,
+    Extension(claims): Extension<crate::rbac::middleware::Claims>,
+    Json(req): Json<IssueTokenRequest>,
+) -> Response {
+    if !is_superadmin(&claims) {
+        return (StatusCode::FORBIDDEN, "only superadmin may issue tokens").into_response();
+    }
+
+    let expires_at = req
+        .expires_at
+        .unwrap_or_else(|| Utc::now() + Duration::days(365));
+
+    let sa_ref = object_string_id(&req.namespace, KIND_SERVICE_ACCOUNT, &req.service_account);
+
+    let token_obj: Object<ServiceAccountToken> = Object {
+        api_version: Some(API_VERSION_V1.to_string()),
+        kind: Some(KIND_SERVICE_ACCOUNT_TOKEN.to_string()),
+        namespace: Some(req.namespace.clone()),
+        name: req.token_name.clone(),
+        spec: ServiceAccountToken {
+            service_account: sa_ref,
+            expires_at: Some(expires_at),
+        },
+        id: None,
+        created_at: None,
+        updated_at: None,
+        annotations: None,
+        labels: None,
+    };
+
+    let result = match state.backend.apply(token_obj).await {
+        Ok(r) => r,
+        Err(e) => return api_err(e),
+    };
+
+    let token_id = match result.first() {
+        Some(o) => o.id,
+        None => {
+            return api_err(crate::error::DawnStoreError::InternalServerError(
+                "apply returned no object".to_string(),
+            ));
+        }
+    };
+
+    let token = match jwt_service::create_token(
+        &req.service_account,
+        &req.namespace,
+        &req.token_name,
+        token_id,
+        expires_at,
+        &state.private_key_pem,
+    ) {
+        Ok(t) => t,
+        Err(e) => return api_err(crate::error::DawnStoreError::JwtError(e)),
+    };
+
+    ok(IssueTokenResponse { token, token_id, expires_at })
 }
