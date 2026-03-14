@@ -37,14 +37,12 @@ This is a Cargo workspace with 5 crates implementing a Kubernetes-like generic o
 
 - **`dawnstore-lib`** — Shared types used across all crates: `Object<T>`, `ReturnObject<T>`, `GetObjectsFilter`, `DeleteObject`, `ResourceDefinition`, `ObjectInfo`, etc. No dependencies on other workspace crates.
 
-- **`dawnstore-core`** — Core business logic. Feature-gated: `postgres` feature enables the `PostgresBackend`, `axum` feature enables the HTTP controller routes. Contains:
-  - `backends/postgres/` — `PostgresBackend` struct with `apply_raw`, `get`, `delete`, `get_resource_definitions`, `get_object_infos`, `seed_object_schema`
-  - `backends/postgres/apply_impl.rs` — Object parsing, JSON schema validation, foreign key checking, upsert logic
-  - `backends/postgres/queries.rs` — All sqlx queries (compile-time checked)
-  - `backends/postgres/data_models.rs` — Internal DB structs (`Object`, `ObjectSchema`, `ForeignKeyConstraint`, `Relation`)
-  - `controllers.rs` — Axum route handlers that delegate to `PostgresBackend`
-  - `models.rs` — `ForeignKey`, `ForeignKeyType`, `ForeignKeyBehaviour`, and example domain types (`TestCar`, `Container`)
+- **`dawnstore-core`** — Core business logic. Contains:
+  - `abstractions.rs` — `DawnstoreBackend` trait (existing), `NewDawnStoreBackend` trait (refactor placeholder), `ResourceCache`, `SchemaDefinition`, `ForeignKey`/`ForeignKeyType`/`ForeignKeyBehaviour`, `RawSchema`, `RawForeignKeyConstraint`, `BackendGetObjectsFilter`
+  - `cache.rs` — `DawnstoreCache`: unified tokio-RwLock-backed cache for schema validators (`api_version/kind` → `Arc<jsonschema::Validator>`), FK constraints (`api_version/kind` → `Arc<Vec<RawForeignKeyConstraint>>`), and RBAC permissions. Populated via `init`, `init_schema`, `init_foreign_key`, `init_permission` (each takes a `&impl NewDawnStoreBackend`). Cache keys are built with `schema_cache_key` from `rbac/helpers.rs`.
+  - `controllers.rs` — Axum route handlers that delegate to `DawnstoreBackend`
   - `error.rs` — `DawnStoreError` enum
+  - `rbac/` — RBAC subsystem: models, JWT service, middleware, authz service, permission cache (`RbacCache`), helpers (`object_string_id`, `schema_cache_key`)
 
 - **`dawnstore-api`** — Binary that wires up `PostgresBackend` + Axum. Reads `DATABASE_URL` env var, runs migrations, seeds schemas, serves on `:8080`.
 
@@ -74,8 +72,22 @@ This is a Cargo workspace with 5 crates implementing a Kubernetes-like generic o
 | `POST` | `/get-resource-definitions` | `GetResourceDefinitionFilter` |
 | `DELETE` | `/delete-object` | `DeleteObject` |
 
+### Shared helpers and constants
+
+**Always use the existing helpers and constants from `rbac/helpers.rs` and `rbac/constants.rs` when writing new code — never inline equivalent strings or logic.**
+
+- `rbac/helpers.rs` — formatting helpers:
+  - `object_string_id(namespace, kind, name)` — canonical `namespace/kind/name` string ID for any dawnstore object
+  - `schema_cache_key(api_version, kind)` — cache key in the form `api_version/kind` used by `DawnstoreCache`
+- `rbac/constants.rs` — all well-known kind names (`KIND_NAMESPACE`, `KIND_ROLE`, `KIND_ROLE_BINDING`, `KIND_GLOBAL_ROLE`, `KIND_GLOBAL_ROLE_BINDING`, `KIND_SERVICE_ACCOUNT`, `KIND_SERVICE_ACCOUNT_TOKEN`), the `SYSTEM_NAMESPACE` name, and other fixed string values
+
 ### In-memory caches
 
-`PostgresBackend` holds two `RwLock<HashMap>` caches populated lazily on first access:
-- `schema_cache`: `{api_version}/{kind}` → compiled `jsonschema::Validator`
-- `foreign_key_cache`: `{api_version}/{kind}` → `Vec<ForeignKeyConstraint>`
+**`dawnstore-core` (`DawnstoreCache`)** — the canonical, backend-agnostic cache. One struct with three tokio `RwLock`-backed stores:
+- `schema`: `{api_version}/{kind}` → `Arc<jsonschema::Validator>`
+- `foreign_key`: `{api_version}/{kind}` → `Arc<Vec<RawForeignKeyConstraint>>`
+- `permission`: `(namespace, sa_name)` → `EffectivePermissions` (with a resource index for targeted invalidation)
+
+Initialised via `DawnstoreCache::init(backend)` or per-store via `init_schema`, `init_foreign_key`, `init_permission`. All init functions take `&impl NewDawnStoreBackend`.
+
+**`dawnstore-postgres` (`CacheStore`)** — legacy postgres-specific cache, kept during the refactor. Will be superseded by `DawnstoreCache`.

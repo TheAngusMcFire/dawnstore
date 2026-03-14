@@ -232,12 +232,12 @@ where
     if let Err(e) = check_namespace_restriction(&*state.backend, &obj) {
         return api_err(e);
     }
-    dbg!(&claims_ext);
+    // dbg!(&claims_ext);
     // RBAC: check Apply permission for every object in the payload (when JWT auth is active).
     if let Some(Extension(claims)) = &claims_ext {
         for (ns, kind, name) in extract_apply_identities(&obj) {
             let resolved_kind = state.backend.resolve_kind(&kind);
-            dbg!(&ns, &kind, &name, &resolved_kind);
+            // dbg!(&ns, &kind, &name, &resolved_kind);
             // Check the caller can apply this object.
             match authz_service::is_allowed(
                 &state.rbac_cache,

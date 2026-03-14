@@ -4,6 +4,7 @@ use std::sync::RwLock;
 
 pub use dawnstore_lib::*;
 use schemars::JsonSchema;
+use uuid::Uuid;
 
 use crate::error::DawnStoreError;
 
@@ -105,6 +106,65 @@ impl SchemaDefinition {
             json_schema: serde_json::to_string(&schema).unwrap(),
         }
     }
+}
+
+// ── NewDawnStoreBackend raw data types ────────────────────────────────────────
+
+/// A raw schema entry as returned by the backend — used to populate the schema cache.
+pub struct RawSchema {
+    pub api_version: String,
+    pub kind: String,
+    pub aliases: Vec<String>,
+    pub json_schema: String,
+}
+
+/// A raw foreign key constraint as returned by the backend — used to populate the FK cache.
+pub struct RawForeignKeyConstraint {
+    pub id: Uuid,
+    pub api_version: String,
+    pub kind: String,
+    pub key_path: String,
+    pub ty: ForeignKeyType,
+    pub behaviour: ForeignKeyBehaviour,
+    pub foreign_key_kind: Option<String>,
+    pub parent_key_path: Option<String>,
+}
+
+// ── NewDawnStoreBackend trait ─────────────────────────────────────────────────
+
+/// Filter type used by [`NewDawnStoreBackend::get_objects`].
+///
+/// A focused alternative to [`GetObjectsFilter`] that only exposes the fields
+/// needed by the cache initialisation routines.
+#[derive(Debug, Clone, Default)]
+pub struct BackendGetObjectsFilter {
+    pub namespace: Option<String>,
+    pub kind: Option<String>,
+    pub name: Option<String>,
+}
+
+/// Placeholder backend trait used during the cache-layer refactor.
+///
+/// Implementations provide the raw data required to populate [`crate::cache::DawnstoreCache`].
+/// This trait will eventually replace [`DawnstoreBackend`].
+pub trait NewDawnStoreBackend: Send + Sync {
+    /// Return all registered schemas. Used by the schema cache initialiser.
+    fn load_all_schemas(
+        &self,
+    ) -> impl Future<Output = Result<Vec<RawSchema>, DawnStoreError>> + Send;
+
+    /// Return all registered foreign key constraints across all kinds.
+    /// Used by the FK cache initialiser.
+    fn load_all_foreign_key_constraints(
+        &self,
+    ) -> impl Future<Output = Result<Vec<RawForeignKeyConstraint>, DawnStoreError>> + Send;
+
+    /// Return all objects matching `filter`. Used by the permission cache initialiser
+    /// to load RBAC objects from the backend.
+    fn get_objects(
+        &self,
+        filter: &BackendGetObjectsFilter,
+    ) -> impl Future<Output = Result<Vec<ReturnObject<serde_json::Value>>, DawnStoreError>> + Send;
 }
 
 // ── DawnstoreBackend trait ────────────────────────────────────────────────────
