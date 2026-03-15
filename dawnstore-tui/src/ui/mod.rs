@@ -1,7 +1,7 @@
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout},
-    style::{Color, Style},
+    style::{Color, Modifier, Style},
     widgets::Paragraph,
 };
 
@@ -16,17 +16,16 @@ mod resource_list;
 
 /// Render the full UI for the current app state.
 ///
-/// Layout (3 zones, shared across all views):
 /// ```text
-/// ┌──────────────────────────────────┐
-/// │ header  namespace / kind         │  1 line
-/// ├──────────────────────────────────┤
-/// │                                  │
-/// │  main area                       │  fill
-/// │                                  │
-/// ├──────────────────────────────────┤
-/// │ status / error bar               │  1 line
-/// └──────────────────────────────────┘
+/// ┌──────────────────────────────────────┐
+/// │ header  namespace / kind / filter    │  1 line
+/// ├──────────────────────────────────────┤
+/// │                                      │
+/// │  main area                           │  fill
+/// │                                      │
+/// ├──────────────────────────────────────┤
+/// │ status / error / command bar         │  1 line
+/// └──────────────────────────────────────┘
 /// ```
 pub fn render(app: &App, frame: &mut Frame) {
     let areas = Layout::default()
@@ -44,48 +43,72 @@ pub fn render(app: &App, frame: &mut Frame) {
 }
 
 fn render_header(app: &App, frame: &mut Frame, area: ratatui::layout::Rect) {
-    let kind = app.kind_filter.as_deref().unwrap_or("all");
+    let kind = app
+        .kind_filter
+        .as_deref()
+        .unwrap_or("all");
     let ns = if app.all_namespaces {
         "<all>".to_string()
     } else {
         app.namespace.clone()
     };
-    let filter = if app.name_filter.is_empty() {
-        String::new()
+    let filter = if app.filtering {
+        format!("   /{}_", app.name_filter)
+    } else if !app.name_filter.is_empty() {
+        format!("   filter:{}", app.name_filter)
     } else {
-        format!("  filter: {}", app.name_filter)
+        String::new()
     };
+
+    let count = app.visible_objects().len();
+    let text = format!(" namespace:{ns}   kind:{kind}{filter}   ({count} objects)");
+
     frame.render_widget(
-        Paragraph::new(format!(" namespace: {ns}  kind: {kind}{filter}"))
-            .style(Style::default().bg(Color::DarkGray)),
+        Paragraph::new(text).style(
+            Style::default()
+                .bg(Color::DarkGray)
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        ),
         area,
     );
 }
 
 fn render_main(app: &App, frame: &mut Frame, area: ratatui::layout::Rect) {
-    match app.view {
-        // Popups overlay the resource list.
-        View::ResourceList | View::Confirm | View::NsSwitcher | View::CommandBar => {
+    match &app.view {
+        // Full-screen views — don't render the list behind them.
+        View::Detail => detail::render(app, frame, area),
+        View::Help => help::render(app, frame, area),
+        // List is the base; popups overlay on top.
+        _ => {
             resource_list::render(app, frame, area);
-            match app.view {
+            match &app.view {
                 View::Confirm => confirm::render(app, frame, area),
                 View::NsSwitcher => ns_switcher::render(app, frame, area),
-                View::CommandBar => command_bar::render(app, frame, area),
                 _ => {}
             }
         }
-        View::Detail => detail::render(app, frame, area),
-        View::Help => help::render(app, frame, area),
     }
 }
 
 fn render_footer(app: &App, frame: &mut Frame, area: ratatui::layout::Rect) {
-    let (text, style) = if let Some(err) = &app.error {
-        (format!(" {err}"), Style::default().fg(Color::Red))
-    } else if let Some(status) = &app.status {
-        (format!(" {status}"), Style::default().fg(Color::Green))
-    } else {
-        (" Press ? for help".to_string(), Style::default().fg(Color::DarkGray))
+    let (text, style) = match &app.view {
+        View::CommandBar => (
+            format!(":{}", app.command_input),
+            Style::default().fg(Color::Yellow),
+        ),
+        _ => {
+            if let Some(err) = &app.error {
+                (format!(" {err}"), Style::default().fg(Color::Red))
+            } else if let Some(status) = &app.status {
+                (format!(" {status}"), Style::default().fg(Color::Green))
+            } else {
+                (
+                    " [j/k] navigate  [Enter] detail  [d] delete  [/] filter  [n] ns  [:] cmd  [?] help  [q] quit".to_string(),
+                    Style::default().fg(Color::DarkGray),
+                )
+            }
+        }
     };
     frame.render_widget(Paragraph::new(text).style(style), area);
 }

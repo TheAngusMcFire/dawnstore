@@ -1,5 +1,3 @@
-#![allow(dead_code)] // remove once update.rs drives all variants
-
 use std::{io::stdout, path::PathBuf, time::Duration};
 
 use clap::Parser;
@@ -42,8 +40,8 @@ impl Drop for TerminalGuard {
     }
 }
 
-/// Install a panic hook that restores the terminal and flushes the log before
-/// printing the panic message, so the last recorded event is always on disk.
+/// Install a panic hook that restores the terminal before printing the message,
+/// so the last log entry is always captured and the shell is left usable.
 fn install_panic_hook() {
     let default = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -55,8 +53,8 @@ fn install_panic_hook() {
 
 // ── Logging ───────────────────────────────────────────────────────────────────
 
-/// Initialise file-based logging. Returns the guard that must be held for the
-/// duration of the program to keep the non-blocking writer alive.
+/// Initialise file-based logging. The returned guard must be held for the
+/// entire duration of the program to keep the non-blocking writer alive.
 fn init_logging() -> tracing_appender::non_blocking::WorkerGuard {
     let log_dir = dirs::data_dir()
         .unwrap_or_else(|| PathBuf::from("."))
@@ -70,7 +68,7 @@ fn init_logging() -> tracing_appender::non_blocking::WorkerGuard {
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
         )
         .with_writer(non_blocking)
-        .with_ansi(false) // no colour codes in the log file
+        .with_ansi(false)
         .init();
     guard
 }
@@ -80,7 +78,6 @@ fn init_logging() -> tracing_appender::non_blocking::WorkerGuard {
 #[tokio::main]
 async fn main() -> Result<()> {
     color_eyre::install()?;
-    // Hold the guard for the entire program — dropping it flushes the log.
     let _log_guard = init_logging();
     install_panic_hook();
 
@@ -101,33 +98,25 @@ async fn main() -> Result<()> {
 
     info!("dawnstore-tui starting");
 
-    // ── Channel setup ─────────────────────────────────────────────────────────
-    // Single event channel: all producers (input thread, timer, api task) send
-    // `Event`s to the main loop via cloned senders.
+    // ── Channels ──────────────────────────────────────────────────────────────
     let (event_tx, mut event_rx) = mpsc::channel::<event::Event>(64);
-    // Command channel: main loop sends `Command`s to the api task.
     let (cmd_tx, cmd_rx) = mpsc::channel::<event::Command>(32);
 
-    // ── Spawn producers ───────────────────────────────────────────────────────
-
-    // Input thread: crossterm::event::read() blocks, so it runs on a dedicated
-    // OS thread rather than inside the async runtime.
+    // ── Input thread (blocking — must not run inside tokio) ───────────────────
     let input_tx = event_tx.clone();
-    std::thread::spawn(move || {
-        loop {
-            match crossterm::event::read() {
-                Ok(crossterm::event::Event::Key(key)) => {
-                    if input_tx.blocking_send(event::Event::Key(key)).is_err() {
-                        break; // receiver dropped — main loop exited
-                    }
+    std::thread::spawn(move || loop {
+        match crossterm::event::read() {
+            Ok(crossterm::event::Event::Key(key)) => {
+                if input_tx.blocking_send(event::Event::Key(key)).is_err() {
+                    break;
                 }
-                Ok(_) => {} // ignore resize / mouse / etc. for now
-                Err(_) => break,
             }
+            Ok(_) => {}
+            Err(_) => break,
         }
     });
 
-    // Timer task: sends a Tick every 2 seconds to trigger a background refresh.
+    // ── Timer task ────────────────────────────────────────────────────────────
     let tick_tx = event_tx.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(2));
@@ -139,46 +128,92 @@ async fn main() -> Result<()> {
         }
     });
 
-    // API task: executes commands against the dawnstore API.
+    // ── API task ──────────────────────────────────────────────────────────────
     tokio::spawn(api_task::run(api, cmd_rx, event_tx));
 
     // ── Terminal setup ────────────────────────────────────────────────────────
     enable_raw_mode()?;
     execute!(stdout(), EnterAlternateScreen)?;
-    let _terminal_guard = TerminalGuard; // restores terminal on drop
+    let _guard = TerminalGuard;
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
 
-    // ── Main loop ─────────────────────────────────────────────────────────────
+    // ── App state ─────────────────────────────────────────────────────────────
     let mut app = app::App::default();
 
-    // Trigger an initial fetch.
+    // Initial fetch.
     let _ = cmd_tx
         .send(event::Command::Refresh {
             namespace: Some(app.namespace.clone()),
-            kind: app.kind_filter.clone(),
+            kind: None,
         })
         .await;
 
+    // ── Main loop ─────────────────────────────────────────────────────────────
     loop {
         terminal.draw(|f| ui::render(&app, f))?;
 
         let Some(ev) = event_rx.recv().await else {
-            break; // all senders dropped
+            break;
         };
 
-        // Check for quit before passing to the generic update function.
-        if let event::Event::Key(key) = &ev {
-            use crossterm::event::KeyCode;
-            if matches!(key.code, KeyCode::Char('q')) && app.view == app::View::ResourceList {
-                break;
-            }
-        }
+        match update::update(&mut app, ev) {
+            Some(event::Command::Quit) => break,
 
-        if let Some(cmd) = update::update(&mut app, ev) {
-            let _ = cmd_tx.send(cmd).await;
+            Some(event::Command::OpenEditor) => {
+                open_editor(&mut app, &mut terminal, &cmd_tx).await?;
+            }
+
+            Some(cmd) => {
+                let _ = cmd_tx.send(cmd).await;
+            }
+
+            None => {}
         }
     }
 
     info!("dawnstore-tui exiting");
+    Ok(())
+}
+
+// ── Editor integration ────────────────────────────────────────────────────────
+
+async fn open_editor(
+    app: &mut app::App,
+    terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
+    cmd_tx: &mpsc::Sender<event::Command>,
+) -> Result<()> {
+    let Some(obj) = app.selected_object() else {
+        return Ok(());
+    };
+    let original_yaml = serde_yml::to_string(obj).unwrap_or_default();
+
+    // Write to a named temp file so the editor can open it.
+    let tmp = tempfile::Builder::new().suffix(".yaml").tempfile()?;
+    std::fs::write(tmp.path(), &original_yaml)?;
+    let tmp_path = tmp.path().to_owned();
+
+    // Suspend the TUI.
+    disable_raw_mode()?;
+    execute!(stdout(), LeaveAlternateScreen)?;
+
+    // Launch $EDITOR (or vi as fallback).
+    let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
+    let _ = tokio::process::Command::new(&editor)
+        .arg(&tmp_path)
+        .status()
+        .await;
+
+    // Resume the TUI.
+    enable_raw_mode()?;
+    execute!(stdout(), EnterAlternateScreen)?;
+    terminal.clear()?;
+
+    // If the content changed, apply it.
+    if let Ok(new_yaml) = std::fs::read_to_string(&tmp_path) {
+        if new_yaml != original_yaml {
+            let _ = cmd_tx.send(event::Command::ApplyContent(new_yaml)).await;
+        }
+    }
+
     Ok(())
 }

@@ -779,6 +779,7 @@ dependencies = [
 name = "dawnstore-tui"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "clap",
  "color-eyre",
  "crossterm",
@@ -789,6 +790,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yml",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-appender",

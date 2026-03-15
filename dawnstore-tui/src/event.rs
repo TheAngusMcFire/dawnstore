@@ -12,13 +12,17 @@ pub enum Event {
     ApiObjects(Vec<ReturnObject<serde_json::Value>>),
     /// The API returned a list of namespace names.
     ApiNamespaces(Vec<String>),
+    /// An API call succeeded; the string is a human-readable summary.
+    ApiSuccess(String),
     /// An API call failed.
     ApiError(String),
 }
 
-/// Commands sent from the main loop to the API task.
+/// Commands sent from the main loop to the API task, or handled by the
+/// main loop itself (`Quit`, `OpenEditor`).
 #[derive(Debug)]
 pub enum Command {
+    // ── Forwarded to api_task ─────────────────────────────────────────────
     /// Fetch objects matching the current namespace / kind filter.
     Refresh {
         namespace: Option<String>,
@@ -34,4 +38,12 @@ pub enum Command {
     },
     /// Apply the YAML/JSON file at `path`.
     Apply { path: String },
+    /// Apply already-read YAML/JSON content (used after editor).
+    ApplyContent(String),
+
+    // ── Handled by the main loop ──────────────────────────────────────────
+    /// Open the selected object in $EDITOR and apply changes on save.
+    OpenEditor,
+    /// Exit the application.
+    Quit,
 }

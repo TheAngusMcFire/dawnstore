@@ -32,6 +32,8 @@ pub struct App {
     pub objects: Vec<ReturnObject<serde_json::Value>>,
     /// Index of the highlighted row in the resource list.
     pub selected: usize,
+    /// Whether the user is currently typing in the `/` name filter.
+    pub filtering: bool,
     /// Live name filter string entered via `/`.
     pub name_filter: String,
     /// Namespaces available for the namespace switcher popup.
@@ -42,10 +44,14 @@ pub struct App {
     pub command_input: String,
     /// Scroll offset in the detail YAML view.
     pub detail_scroll: u16,
-    /// Success message shown in the footer; cleared after a timeout tick.
+    /// Where to return when the confirm popup is dismissed.
+    pub confirm_return_view: View,
+    /// Success message shown in the footer.
     pub status: Option<String>,
-    /// Error message shown in red in the footer; cleared after a timeout tick.
+    /// Error message shown in red in the footer.
     pub error: Option<String>,
+    /// Ticks remaining before status/error is cleared (each tick ≈ 2 s).
+    pub status_ticks: u8,
 }
 
 impl Default for App {
@@ -57,13 +63,16 @@ impl Default for App {
             all_namespaces: false,
             objects: Vec::new(),
             selected: 0,
+            filtering: false,
             name_filter: String::new(),
             namespaces: Vec::new(),
             ns_selected: 0,
             command_input: String::new(),
             detail_scroll: 0,
+            confirm_return_view: View::ResourceList,
             status: None,
             error: None,
+            status_ticks: 0,
         }
     }
 }
@@ -74,8 +83,7 @@ impl App {
         self.objects
             .iter()
             .filter(|o| {
-                self.name_filter.is_empty()
-                    || o.name.contains(self.name_filter.as_str())
+                self.name_filter.is_empty() || o.name.contains(self.name_filter.as_str())
             })
             .collect()
     }
@@ -83,5 +91,11 @@ impl App {
     /// The currently selected object, if any.
     pub fn selected_object(&self) -> Option<&ReturnObject<serde_json::Value>> {
         self.visible_objects().into_iter().nth(self.selected)
+    }
+
+    /// Clamp `selected` to valid range after objects change.
+    pub fn clamp_selection(&mut self) {
+        let max = self.visible_objects().len().saturating_sub(1);
+        self.selected = self.selected.min(max);
     }
 }
