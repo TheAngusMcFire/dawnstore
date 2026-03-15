@@ -79,7 +79,7 @@ pub type ObjectAny = Object<serde_json::Value>;
 pub type ReturnAny = ReturnObject<serde_json::Value>;
 pub type Metadata = Object<Option<()>>;
 
-#[derive(Debug, serde::Serialize, serde::Deserialize, JsonSchema)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, JsonSchema)]
 pub struct ReturnObject<T> {
     pub id: uuid::Uuid,
     pub created_at: DateTime<Utc>,

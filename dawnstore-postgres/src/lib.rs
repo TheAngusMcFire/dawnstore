@@ -442,7 +442,15 @@ impl PostgresBackend {
                     .filter(|o| fk_ids.iter().any(|x| x.foreign_object_id == o.id))
                     .collect::<Vec<_>>();
 
-                let obj_path = format!("{}_object", fkc.key_path);
+                use dawnstore_core::abstractions::ForeignKeyType;
+                let obj_path = match fkc.r#type {
+                    ForeignKeyType::OneOrMany | ForeignKeyType::NoneOrMany => {
+                        format!("{}_objects", fkc.key_path)
+                    }
+                    ForeignKeyType::One | ForeignKeyType::OneOptional => {
+                        format!("{}_object", fkc.key_path)
+                    }
+                };
                 let mut path_segments = obj_path.split(".").collect::<Vec<_>>();
                 let last_segment = path_segments.pop();
                 let mut key_position = &mut obj.spec;
@@ -460,11 +468,9 @@ impl PostgresBackend {
                 }
 
                 if let (Some(seg), Value::Object(x)) = (last_segment, key_position) {
-                    use dawnstore_core::abstractions::ForeignKeyType;
                     let value = match fkc.r#type {
                         ForeignKeyType::One | ForeignKeyType::OneOptional => serde_json::to_value(objs.pop())?,
-                        ForeignKeyType::OneOrMany => serde_json::to_value(objs)?,
-                        ForeignKeyType::NoneOrMany => serde_json::to_value(objs.pop())?,
+                        ForeignKeyType::OneOrMany | ForeignKeyType::NoneOrMany => serde_json::to_value(objs)?,
                     };
                     x.insert(seg.to_string(), value);
                 }

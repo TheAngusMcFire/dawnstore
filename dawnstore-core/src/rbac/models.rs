@@ -1,3 +1,4 @@
+use dawnstore_lib::ReturnObject;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -46,6 +47,12 @@ pub struct ServiceAccountToken {
     pub service_account: String,
     /// `None` = never expires.
     pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// Navigation property: the referenced `ServiceAccount` object.
+    /// When set on apply input, the embedded object is extracted and applied first.
+    /// Populated on get when `fill_child_foreign_keys` is enabled.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub service_account_object: Option<ReturnObject<Box<ServiceAccount>>>,
 }
 
 // ── Role ──────────────────────────────────────────────────────────────────────
@@ -76,6 +83,14 @@ pub struct RoleBinding {
     pub role: String,
     /// FK → ServiceAccount, each value is `namespace/service-account/name`.
     pub subjects: Vec<String>,
+    /// Navigation property: the bound `Role` object.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub role_object: Option<ReturnObject<Box<Role>>>,
+    /// Navigation property: the bound `ServiceAccount` objects.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub subjects_objects: Option<Vec<ReturnObject<Box<ServiceAccount>>>>,
 }
 
 // ── GlobalRoleBinding ─────────────────────────────────────────────────────────
@@ -88,4 +103,12 @@ pub struct GlobalRoleBinding {
     pub role: String,
     /// FK → ServiceAccount, each value is `namespace/service-account/name`.
     pub subjects: Vec<String>,
+    /// Navigation property: the bound `GlobalRole` object.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub role_object: Option<ReturnObject<Box<GlobalRole>>>,
+    /// Navigation property: the bound `ServiceAccount` objects.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub subjects_objects: Option<Vec<ReturnObject<Box<ServiceAccount>>>>,
 }

@@ -150,6 +150,7 @@ pub async fn bootstrap<B: DawnstoreBackend>(
         spec: ServiceAccountToken {
             service_account: object_string_id(SYSTEM_NAMESPACE, KIND_SERVICE_ACCOUNT, SA_SUPERADMIN),
             expires_at: Some(expires_at),
+            service_account_object: None,
         },
         id: None,
         created_at: None,

@@ -313,6 +313,53 @@ fn extract_fk_values(
     Ok(result)
 }
 
+/// Extract embedded navigation-property objects from a list of objects.
+///
+/// Navigation properties are spec fields whose name ends with `_object` (a single
+/// embedded `ReturnObject`) or `_objects` (an array of them). Each embedded value
+/// is removed from the parent's spec and returned as a separate `ObjectAny` so it
+/// can be validated, permission-checked, and upserted alongside the parent.
+///
+/// Returning the extracted objects separately lets the caller prepend them to the
+/// batch so they are available as FK targets when the parent object is processed.
+fn extract_navigation_properties(objects: Vec<ObjectAny>) -> (Vec<ObjectAny>, Vec<ObjectAny>) {
+    let mut cleaned = Vec::with_capacity(objects.len());
+    let mut extracted = Vec::new();
+
+    for mut obj in objects {
+        if let serde_json::Value::Object(ref mut map) = obj.spec {
+            let nav_keys: Vec<String> = map
+                .keys()
+                .filter(|k| k.ends_with("_object") || k.ends_with("_objects"))
+                .cloned()
+                .collect();
+
+            for key in nav_keys {
+                let val = match map.remove(&key) {
+                    Some(v) => v,
+                    None => continue,
+                };
+                if key.ends_with("_objects") {
+                    if let Some(arr) = val.as_array() {
+                        for item in arr {
+                            if let Ok(embedded) = serde_json::from_value::<ObjectAny>(item.clone()) {
+                                extracted.push(embedded);
+                            }
+                        }
+                    }
+                } else if !val.is_null() {
+                    if let Ok(embedded) = serde_json::from_value::<ObjectAny>(val) {
+                        extracted.push(embedded);
+                    }
+                }
+            }
+        }
+        cleaned.push(obj);
+    }
+
+    (cleaned, extracted)
+}
+
 /// Walk the full FK graph reachable from `seed_objects` using an iterative work queue.
 ///
 /// Seeds the queue with all top-level objects being applied. For each object
@@ -472,7 +519,15 @@ pub async fn apply<B: DawnstoreBackend>(
     input: serde_json::Value,
 ) -> Result<Vec<ReturnObject<serde_json::Value>>, DawnStoreError> {
     // Step 1: normalise the raw payload into a flat list of objects.
-    let objects = parse_input(input)?;
+    let raw_objects = parse_input(input)?;
+
+    // Step 2: extract embedded navigation-property objects from the input.
+    // Nav-prop fields (ending in `_object` / `_objects`) are removed from each
+    // parent's spec and prepended to the batch so they are FK-available when
+    // their parent is processed. They are validated and upserted alongside the
+    // parent objects, so the caller only needs to send one request.
+    let (parent_objects, nav_objects) = extract_navigation_properties(raw_objects);
+    let objects: Vec<ObjectAny> = nav_objects.into_iter().chain(parent_objects).collect();
 
     for obj in &objects {
         let namespace = obj.namespace.as_deref().unwrap_or("default");
@@ -480,21 +535,21 @@ pub async fn apply<B: DawnstoreBackend>(
         let api_version =
             obj.api_version.as_deref().ok_or(DawnStoreError::ApiVersionMissingInObject)?;
 
-        // Step 2: permission check (Apply) — fail fast before any heavier work.
+        // Step 3: permission check (Apply) — fail fast before any heavier work.
         check_permission(cache, backend, caller, Verb::Apply, namespace, kind, &obj.name).await?;
 
-        // Step 3: schema validation against the cached JSON schema validator.
+        // Step 4: schema validation against the cached JSON schema validator.
         validate_schema(cache, api_version, kind, &obj.name, &obj.spec).await?;
     }
 
-    // Steps 4 + 5: iterative FK graph walk — resolves, existence-checks, and
+    // Steps 5 + 6: iterative FK graph walk — resolves, existence-checks, and
     // Get-permission-checks every FK target to arbitrary nesting depth.
     let relations = walk_foreign_key_graph(backend, cache, caller, &objects).await?;
 
-    // Step 6: upsert all objects and reconcile the relations table in one transaction.
+    // Step 7: upsert all objects and reconcile the relations table in one transaction.
     let applied = backend.upsert_objects(objects, relations).await?;
 
-    // Step 7: invalidate the RBAC permission cache for any applied RBAC resources so
+    // Step 8: invalidate the RBAC permission cache for any applied RBAC resources so
     // that downstream Get / Apply / Delete checks reflect the change immediately.
     for obj in &applied {
         if matches!(

@@ -299,6 +299,7 @@ async fn issue_token<B: DawnstoreBackend + 'static>(
         spec: ServiceAccountToken {
             service_account: sa_ref,
             expires_at: Some(expires_at),
+            service_account_object: None,
         },
         id: None,
         created_at: None,
