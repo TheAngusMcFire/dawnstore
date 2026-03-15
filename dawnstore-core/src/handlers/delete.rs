@@ -41,12 +41,17 @@ async fn get_or_load_permissions<B: DawnstoreBackend>(
 ///
 /// When `caller` is `None` (unauthenticated / superadmin path) or the caller is
 /// the system superadmin SA, the check is skipped and `Ok(())` is returned.
+///
+/// Namespace-scoped grants (from `RoleBinding`s) are only honoured when the
+/// target `namespace` matches the caller's own namespace. Global grants apply
+/// across all namespaces.
+///
 /// Returns [`DawnStoreError::Forbidden`] if the caller lacks the required permission.
 async fn check_delete_permission<B: DawnstoreBackend>(
     cache: &DawnstoreCache,
     backend: &B,
     caller: Option<&Claims>,
-    _namespace: &str,
+    namespace: &str,
     kind: &str,
     name: &str,
 ) -> Result<(), DawnStoreError> {
@@ -58,15 +63,16 @@ async fn check_delete_permission<B: DawnstoreBackend>(
     }
 
     let perms = get_or_load_permissions(cache, backend, caller).await?;
-    let allowed = perms
-        .namespaced
-        .iter()
-        .chain(perms.global.iter())
-        .any(|scope| {
-            scope.verbs.contains(&Verb::Delete)
-                && scope.kinds.iter().any(|k| k == "*" || k == kind)
-                && scope.names.as_ref().map_or(true, |names| names.iter().any(|n| n == name))
-        });
+
+    let verb_kind_name = |scope: &crate::cache::GrantedScope| {
+        scope.verbs.contains(&Verb::Delete)
+            && scope.kinds.iter().any(|k| k == "*" || k == kind)
+            && scope.names.as_ref().map_or(true, |names| names.iter().any(|n| n == name))
+    };
+
+    // Namespace-scoped grants are only valid within the caller's own namespace.
+    let allowed = (caller.namespace == namespace && perms.namespaced.iter().any(verb_kind_name))
+        || perms.global.iter().any(verb_kind_name);
 
     if allowed {
         Ok(())

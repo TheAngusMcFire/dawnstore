@@ -1877,3 +1877,98 @@ async fn deleted_token_is_rejected(pool: PgPool) -> sqlx::Result<()> {
 
     Ok(())
 }
+
+// ── Problem 2: namespace-scoped grants must not cross namespace boundaries ────
+
+/// A caller whose RoleBinding is in `ns-a` must be denied apply/delete in `ns-b`,
+/// even if the role grants the same kind.
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn namespace_scoped_grant_does_not_cross_namespace(pool: PgPool) -> sqlx::Result<()> {
+    let server = spawn_rbac_server(pool).await;
+    let sa = &server.bootstrap_token;
+
+    // Two namespaces, one SA in ns-a, one role granting apply+delete on container in ns-a.
+    let r = http_apply(&server, sa, serde_json::json!([
+        {"api_version": "v1", "kind": "namespace", "namespace": "system", "name": "ns-a"},
+        {"api_version": "v1", "kind": "namespace", "namespace": "system", "name": "ns-b"},
+        {"api_version": "v1", "kind": "serviceaccount", "namespace": "ns-a", "name": "alice"},
+        {
+            "api_version": "v1", "kind": "role", "namespace": "ns-a", "name": "editor",
+            "rules": [{"api_version": "*", "kinds": ["container"], "verbs": ["get", "apply", "delete"]}]
+        },
+        {
+            "api_version": "v1", "kind": "rolebinding", "namespace": "ns-a", "name": "bind-alice",
+            "role": "role/editor",
+            "subjects": ["serviceaccount/alice"]
+        }
+    ])).await;
+    assert!(r["error"].is_null(), "fixture apply must succeed: {r}");
+
+    let alice_jwt = issue_jwt(&server, "ns-a", "alice", "alice-tok").await;
+
+    // Alice can apply in her own namespace.
+    let r = http_apply(&server, &alice_jwt, serde_json::json!({
+        "api_version": "v2", "kind": "container", "namespace": "ns-a", "name": "own", "nr": 1
+    })).await;
+    assert!(r["error"].is_null(), "alice must apply in ns-a: {r}");
+
+    // Alice must be denied apply in the foreign namespace.
+    let r = http_apply(&server, &alice_jwt, serde_json::json!({
+        "api_version": "v2", "kind": "container", "namespace": "ns-b", "name": "foreign", "nr": 2
+    })).await;
+    assert!(!r["error"].is_null(), "alice must NOT apply in ns-b: {r}");
+    assert_eq!(r["error"]["type"], "forbidden", "expected forbidden: {r}");
+
+    // Superadmin seeds a container in ns-b for the delete test.
+    let r = http_apply(&server, sa, serde_json::json!({
+        "api_version": "v2", "kind": "container", "namespace": "ns-b", "name": "victim", "nr": 3
+    })).await;
+    assert!(r["error"].is_null(), "superadmin seeding ns-b container: {r}");
+
+    // Alice must be denied delete in the foreign namespace.
+    let r = http_delete(&server, &alice_jwt, serde_json::json!({
+        "namespace": "ns-b", "kind": "container", "name": "victim"
+    })).await;
+    assert!(!r["error"].is_null(), "alice must NOT delete in ns-b: {r}");
+    assert_eq!(r["error"]["type"], "forbidden", "expected forbidden: {r}");
+
+    Ok(())
+}
+
+// ── Problem 3: namespace restriction must apply to nav-prop embedded objects ──
+
+/// Embedding a `Namespace` object in a nav-prop field must not bypass the
+/// restriction that namespaces may only be created in the `system` namespace.
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn navprop_embedded_namespace_outside_system_is_rejected(pool: PgPool) -> sqlx::Result<()> {
+    let server = spawn_rbac_server(pool).await;
+    let sa = &server.bootstrap_token;
+
+    // Seed a namespace and a container object so the apply has something to reference.
+    let r = http_apply(&server, sa, serde_json::json!([
+        {"api_version": "v1", "kind": "namespace", "namespace": "system", "name": "embed-test"},
+        {"api_version": "v2", "kind": "container", "namespace": "embed-test", "name": "host", "nr": 1}
+    ])).await;
+    assert!(r["error"].is_null(), "fixture apply must succeed: {r}");
+
+    // Attempt to embed a Namespace object targeting a non-system namespace inside
+    // a nav-prop field of an otherwise valid container object.
+    let r = http_apply(&server, sa, serde_json::json!({
+        "api_version": "v2", "kind": "container", "namespace": "embed-test", "name": "carrier", "nr": 2,
+        "evil_object": {
+            "api_version": "v1", "kind": "namespace",
+            "namespace": "embed-test", "name": "injected"
+        }
+    })).await;
+    assert!(!r["error"].is_null(), "embedded namespace outside system must be rejected: {r}");
+
+    // The namespace object must not have been created.
+    let r = http_get_objects(&server, sa, serde_json::json!({
+        "kind": "namespace", "name": "injected"
+    })).await;
+    assert!(r["error"].is_null(), "get must not error: {r}");
+    let items = get_resp_data_array(&r);
+    assert!(items.is_empty(), "injected namespace must not exist: {r}");
+
+    Ok(())
+}

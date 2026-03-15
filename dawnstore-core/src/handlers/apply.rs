@@ -11,7 +11,8 @@ use crate::cache::DawnstoreCache;
 use crate::error::DawnStoreError;
 use crate::cache::{EffectivePermissions, GrantedScope, Verb, is_superadmin};
 use crate::rbac::constants::{
-    KIND_GLOBAL_ROLE, KIND_GLOBAL_ROLE_BINDING, KIND_ROLE, KIND_ROLE_BINDING,
+    KIND_GLOBAL_ROLE, KIND_GLOBAL_ROLE_BINDING, KIND_NAMESPACE, KIND_ROLE, KIND_ROLE_BINDING,
+    SYSTEM_NAMESPACE,
 };
 use crate::rbac::helpers::object_string_id;
 use crate::rbac::middleware::Claims;
@@ -67,16 +68,26 @@ fn parse_input(input: serde_json::Value) -> Result<Vec<ObjectAny>, DawnStoreErro
     }
 }
 
-/// Returns `true` if `perms` grants `verb` on `(kind, name)`.
-/// Api-version filtering is intentionally omitted here; roles are matched solely
-/// by verb + kind + name at the apply-handler level.
-fn has_permission(perms: &EffectivePermissions, verb: Verb, kind: &str, name: &str) -> bool {
+/// Returns `true` if `perms` grants `verb` on `(target_namespace, kind, name)`.
+///
+/// Namespace-scoped grants (from `RoleBinding`s, stored in `perms.namespaced`) are
+/// only honoured when `caller_namespace == target_namespace`. Global grants (from
+/// `GlobalRoleBinding`s) apply regardless of namespace.
+fn has_permission(
+    perms: &EffectivePermissions,
+    verb: Verb,
+    caller_namespace: &str,
+    target_namespace: &str,
+    kind: &str,
+    name: &str,
+) -> bool {
     let check = |scope: &GrantedScope| {
         scope.verbs.contains(&verb)
             && scope.kinds.iter().any(|k| k == "*" || k == kind)
             && scope.names.as_ref().map_or(true, |names| names.iter().any(|n| n == name))
     };
-    perms.namespaced.iter().any(check) || perms.global.iter().any(check)
+    (caller_namespace == target_namespace && perms.namespaced.iter().any(check))
+        || perms.global.iter().any(check)
 }
 
 /// Verify that `caller` holds `verb` permission on `(namespace, kind, name)`.
@@ -84,16 +95,17 @@ fn has_permission(perms: &EffectivePermissions, verb: Verb, kind: &str, name: &s
 /// When `caller` is `None` (unauthenticated / superadmin path) the check is
 /// skipped and `Ok(())` is returned immediately.
 ///
-/// Otherwise the permission cache is consulted first. On a cache miss the
-/// full permission cache is rebuilt from the backend, and the check is
-/// re-evaluated. Returns [`DawnStoreError::Forbidden`] if the caller lacks
-/// the required permission.
+/// Namespace-scoped grants (from `RoleBinding`s) are only honoured when the
+/// target `namespace` matches the caller's own namespace. Global grants apply
+/// across all namespaces.
+///
+/// Returns [`DawnStoreError::Forbidden`] if the caller lacks the required permission.
 async fn check_permission<B: DawnstoreBackend>(
     cache: &DawnstoreCache,
     backend: &B,
     caller: Option<&Claims>,
     verb: Verb,
-    _namespace: &str,
+    namespace: &str,
     kind: &str,
     name: &str,
 ) -> Result<(), DawnStoreError> {
@@ -106,7 +118,7 @@ async fn check_permission<B: DawnstoreBackend>(
 
     // Fast path: check the in-memory cache.
     if let Some(perms) = cache.get_permissions(&caller.namespace, &caller.sub) {
-        return if has_permission(&perms, verb, kind, name) {
+        return if has_permission(&perms, verb, &caller.namespace, namespace, kind, name) {
             Ok(())
         } else {
             Err(DawnStoreError::Forbidden)
@@ -117,7 +129,7 @@ async fn check_permission<B: DawnstoreBackend>(
     // re-evaluate. The SA will have empty permissions if not in any binding.
     cache.init_permission(backend).await?;
     let perms = cache.get_permissions(&caller.namespace, &caller.sub).unwrap_or_default();
-    if has_permission(&perms, verb, kind, name) {
+    if has_permission(&perms, verb, &caller.namespace, namespace, kind, name) {
         Ok(())
     } else {
         Err(DawnStoreError::Forbidden)
@@ -529,27 +541,44 @@ pub async fn apply<B: DawnstoreBackend>(
     let (parent_objects, nav_objects) = extract_navigation_properties(raw_objects);
     let objects: Vec<ObjectAny> = nav_objects.into_iter().chain(parent_objects).collect();
 
+    // Step 3: enforce the namespace restriction on the full assembled batch,
+    // including any objects that arrived via nav-prop embedding. `Namespace`
+    // objects may only be created inside the `system` namespace; any attempt
+    // to create one elsewhere — including through an embedded nav-prop that
+    // bypassed the controller-level check — is rejected here.
+    for obj in &objects {
+        let ns = obj.namespace.as_deref().unwrap_or("default");
+        let kind_raw = obj.kind.as_deref().unwrap_or("");
+        if cache.resolve_kind(kind_raw).await.as_deref() == Some(KIND_NAMESPACE)
+            && ns != SYSTEM_NAMESPACE
+        {
+            return Err(DawnStoreError::NamespaceCanOnlyBeCreatedInSystemNamespace(
+                ns.to_string(),
+            ));
+        }
+    }
+
     for obj in &objects {
         let namespace = obj.namespace.as_deref().unwrap_or("default");
         let kind = obj.kind.as_deref().ok_or(DawnStoreError::KindMissingInObject)?;
         let api_version =
             obj.api_version.as_deref().ok_or(DawnStoreError::ApiVersionMissingInObject)?;
 
-        // Step 3: permission check (Apply) — fail fast before any heavier work.
+        // Step 4: permission check (Apply) — fail fast before any heavier work.
         check_permission(cache, backend, caller, Verb::Apply, namespace, kind, &obj.name).await?;
 
-        // Step 4: schema validation against the cached JSON schema validator.
+        // Step 5: schema validation against the cached JSON schema validator.
         validate_schema(cache, api_version, kind, &obj.name, &obj.spec).await?;
     }
 
-    // Steps 5 + 6: iterative FK graph walk — resolves, existence-checks, and
+    // Steps 6 + 7: iterative FK graph walk — resolves, existence-checks, and
     // Get-permission-checks every FK target to arbitrary nesting depth.
     let relations = walk_foreign_key_graph(backend, cache, caller, &objects).await?;
 
-    // Step 7: upsert all objects and reconcile the relations table in one transaction.
+    // Step 8: upsert all objects and reconcile the relations table in one transaction.
     let applied = backend.upsert_objects(objects, relations).await?;
 
-    // Step 8: invalidate the RBAC permission cache for any applied RBAC resources so
+    // Step 9: invalidate the RBAC permission cache for any applied RBAC resources so
     // that downstream Get / Apply / Delete checks reflect the change immediately.
     for obj in &applied {
         if matches!(
