@@ -31,7 +31,12 @@ async fn main() -> color_eyre::Result<()> {
     }
 
     let args = args::Cli::parse();
-    let file = std::fs::read_to_string(&args.context_path)?;
+    let file = std::fs::read_to_string(&args.context_path).map_err(|e| {
+        color_eyre::eyre::eyre!(
+            "could not read context file '{}': {e}\nHint: set --context-path or DAWNSTORE_CONTEXT",
+            args.context_path
+        )
+    })?;
     let context = serde_yml::from_str::<config::Context>(&file)?;
 
     // Token priority: --token / DAWNSTORE_TOKEN env var > context file token field.
