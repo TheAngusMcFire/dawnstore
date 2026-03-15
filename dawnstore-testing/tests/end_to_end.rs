@@ -21,10 +21,20 @@ use tokio::net::TcpListener;
 static MIGRATOR: sqlx::migrate::Migrator =
     sqlx::migrate!("../dawnstore-postgres/migrations");
 
-/// Starts a test server backed by `pool`, seeds the `container` schema,
-/// and returns a client pointed at it. The server runs until the test ends.
+/// Starts a test server backed by `pool`, seeds RBAC schemas + the `container`
+/// schema, and returns a client pointed at it. The server runs until the test ends.
+///
+/// RBAC schemas (including the `namespace` kind) are always seeded so that the
+/// namespace-existence check is active in every test. A `default` namespace
+/// object is pre-created so existing tests that apply to "default" work without
+/// explicitly creating it.
 async fn spawn_server(pool: PgPool) -> Api {
     let backend = PostgresBackend::new(pool);
+
+    // Seed RBAC schemas + system/default namespaces + superadmin SA.
+    dawnstore_core::rbac::init(&backend).await.unwrap();
+
+    // Seed the container schema.
     backend
         .seed_object_schema::<Container>(
             "v1",
@@ -196,6 +206,12 @@ async fn get_filter_by_name(pool: PgPool) -> sqlx::Result<()> {
 async fn get_filter_by_namespace(pool: PgPool) -> sqlx::Result<()> {
     let api = spawn_server(pool).await;
 
+    // Create namespaces first so the namespace-existence check passes.
+    api.apply_str(serde_json::to_string(&serde_json::json!([
+        {"api_version": "v1", "kind": "namespace", "namespace": "system", "name": "ns-a"},
+        {"api_version": "v1", "kind": "namespace", "namespace": "system", "name": "ns-b"},
+    ])).unwrap()).await.unwrap();
+
     api.apply_str(
         serde_json::to_string(&serde_json::json!({
             "api_version": "v1", "kind": "container",
@@ -270,10 +286,13 @@ async fn resource_definitions_returns_seeded_schema(pool: PgPool) -> sqlx::Resul
         .await
         .unwrap();
 
-    assert_eq!(defs.len(), 1);
-    assert_eq!(defs[0].kind, "container");
-    assert_eq!(defs[0].api_version, "v1");
-    assert!(defs[0].aliases.contains(&"containers".to_string()));
+    // RBAC schemas are also seeded; filter down to the container schema.
+    let container_def = defs.iter().find(|d| d.kind == "container" && d.api_version == "v1");
+    assert!(container_def.is_some(), "container schema must be present");
+    let container_def = container_def.unwrap();
+    assert_eq!(container_def.kind, "container");
+    assert_eq!(container_def.api_version, "v1");
+    assert!(container_def.aliases.contains(&"containers".to_string()));
 
     Ok(())
 }
@@ -319,6 +338,7 @@ async fn aliases_resolve_independently_for_multiple_kinds(pool: PgPool) -> sqlx:
     use dawnstore_testing::EmptyObject;
 
     let backend = PostgresBackend::new(pool);
+    dawnstore_core::rbac::init(&backend).await.unwrap();
     backend
         .seed_object_schema::<Container>(
             "v1",
@@ -475,9 +495,13 @@ async fn namespace_query_translates_default_to_system(pool: PgPool) -> sqlx::Res
     let body: dawnstore_lib::DawnStoreResponse<Vec<serde_json::Value>> =
         resp.json().await.unwrap();
     let objects = body.data.expect("expected data in response");
-    assert_eq!(objects.len(), 1, "should find the system namespace");
-    assert_eq!(objects[0]["name"], "system");
-    assert_eq!(objects[0]["namespace"], "system");
+    // rbac::init seeds both "system" and "default" namespace objects (both live in
+    // the system namespace), so namespace="default" (→ "system") returns both.
+    assert_eq!(objects.len(), 2, "should find both seeded namespaces");
+    assert!(
+        objects.iter().any(|o| o["name"] == "system" && o["namespace"] == "system"),
+        "system namespace must be present"
+    );
 
     // Querying with no namespace should also return system namespaces.
     let resp2 = server
@@ -494,8 +518,8 @@ async fn namespace_query_translates_default_to_system(pool: PgPool) -> sqlx::Res
     let body2: dawnstore_lib::DawnStoreResponse<Vec<serde_json::Value>> =
         resp2.json().await.unwrap();
     let objects2 = body2.data.expect("expected data in response");
-    assert_eq!(objects2.len(), 1);
-    assert_eq!(objects2[0]["name"], "system");
+    assert_eq!(objects2.len(), 2);
+    assert!(objects2.iter().any(|o| o["name"] == "system"));
 
     Ok(())
 }
@@ -985,7 +1009,7 @@ async fn issue_token_superadmin_can_issue(pool: PgPool) -> sqlx::Result<()> {
 async fn issue_token_non_superadmin_is_forbidden(pool: PgPool) -> sqlx::Result<()> {
     let server = spawn_rbac_server(pool).await;
 
-    // Create a regular service account in a separate namespace.
+    // Create "test-ns" namespace and a regular service account in it.
     let apply_resp = server
         .api
         .get_client()
@@ -993,12 +1017,10 @@ async fn issue_token_non_superadmin_is_forbidden(pool: PgPool) -> sqlx::Result<(
         .bearer_auth(&server.bootstrap_token)
         .header("content-type", "application/json")
         .body(
-            serde_json::json!({
-                "api_version": "v1",
-                "kind": "serviceaccount",
-                "namespace": "test-ns",
-                "name": "regular"
-            })
+            serde_json::json!([
+                {"api_version": "v1", "kind": "namespace", "namespace": "system", "name": "test-ns"},
+                {"api_version": "v1", "kind": "serviceaccount", "namespace": "test-ns", "name": "regular"}
+            ])
             .to_string(),
         )
         .send()
@@ -2512,6 +2534,248 @@ async fn deleted_sa_does_not_leak_permissions_to_recreated_sa(pool: PgPool) -> s
     })).await;
     assert!(!r["error"].is_null(), "new alice must not inherit old alice's permissions: {r}");
     assert_eq!(r["error"]["type"], "forbidden", "expected forbidden: {r}");
+
+    Ok(())
+}
+
+// ── Namespace lifecycle ───────────────────────────────────────────────────────
+
+/// Applying an object to a namespace that has not been created must be rejected.
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn apply_to_nonexistent_namespace_is_rejected(pool: PgPool) -> sqlx::Result<()> {
+    let api = spawn_server(pool).await;
+
+    let result = api
+        .apply_str(serde_json::to_string(&serde_json::json!({
+            "api_version": "v1",
+            "kind": "container",
+            "namespace": "ghost-ns",
+            "name": "box-1",
+            "nr": 1,
+        }))
+        .unwrap())
+        .await;
+
+    assert!(result.is_err(), "apply to non-existent namespace must fail");
+    let dawnstore_client_lib::DawnstoreApiError::ServerError(err) = result.unwrap_err() else {
+        panic!("expected ServerError");
+    };
+    assert!(
+        matches!(err, dawnstore_lib::DawnStoreApiError::ValidationError { .. }),
+        "expected ValidationError, got {err:?}",
+    );
+
+    Ok(())
+}
+
+/// After creating a namespace, objects can be applied into it.
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn apply_to_existing_namespace_succeeds(pool: PgPool) -> sqlx::Result<()> {
+    let api = spawn_server(pool).await;
+
+    // Create the namespace first.
+    api.apply_str(serde_json::to_string(&serde_json::json!({
+        "api_version": "v1",
+        "kind": "namespace",
+        "namespace": "system",
+        "name": "myns",
+    }))
+    .unwrap())
+    .await
+    .unwrap();
+
+    // Now apply a container into it — must succeed.
+    let result = api
+        .apply_str(serde_json::to_string(&serde_json::json!({
+            "api_version": "v1",
+            "kind": "container",
+            "namespace": "myns",
+            "name": "box-1",
+            "nr": 42,
+        }))
+        .unwrap())
+        .await
+        .unwrap();
+
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].namespace, "myns");
+    assert_eq!(result[0].name, "box-1");
+
+    Ok(())
+}
+
+/// Namespace objects can only be created in the `system` namespace.
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn namespace_object_must_live_in_system_namespace(pool: PgPool) -> sqlx::Result<()> {
+    let api = spawn_server(pool).await;
+
+    let result = api
+        .apply_str(serde_json::to_string(&serde_json::json!({
+            "api_version": "v1",
+            "kind": "namespace",
+            "namespace": "default",   // wrong — must be "system"
+            "name": "bad-ns",
+        }))
+        .unwrap())
+        .await;
+
+    assert!(result.is_err(), "namespace in wrong namespace must be rejected");
+    let dawnstore_client_lib::DawnstoreApiError::ServerError(err) = result.unwrap_err() else {
+        panic!("expected ServerError");
+    };
+    assert!(
+        matches!(err, dawnstore_lib::DawnStoreApiError::NamespaceRestriction { .. }),
+        "expected NamespaceRestriction, got {err:?}",
+    );
+
+    Ok(())
+}
+
+/// Deleting a namespace cascades to all objects inside it.
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn delete_namespace_cascades_objects(pool: PgPool) -> sqlx::Result<()> {
+    let api = spawn_server(pool).await;
+
+    // Create namespace.
+    api.apply_str(serde_json::to_string(&serde_json::json!({
+        "api_version": "v1", "kind": "namespace", "namespace": "system", "name": "myns",
+    }))
+    .unwrap())
+    .await
+    .unwrap();
+
+    // Create two containers in it.
+    for name in ["box-a", "box-b"] {
+        api.apply_str(serde_json::to_string(&serde_json::json!({
+            "api_version": "v1", "kind": "container",
+            "namespace": "myns", "name": name, "nr": 1,
+        }))
+        .unwrap())
+        .await
+        .unwrap();
+    }
+
+    // Confirm they exist.
+    let before = api
+        .get_objects(&GetObjectsFilter { namespace: Some("myns".into()), ..Default::default() })
+        .await
+        .unwrap();
+    assert_eq!(before.len(), 2, "expected 2 containers before delete");
+
+    // Delete the namespace.
+    api.delete_object(&DeleteObject {
+        namespace: Some("system".into()),
+        kind: "namespace".into(),
+        name: "myns".into(),
+    })
+    .await
+    .unwrap();
+
+    // All containers must be gone.
+    let after = api
+        .get_objects(&GetObjectsFilter { namespace: Some("myns".into()), ..Default::default() })
+        .await
+        .unwrap();
+    assert_eq!(after.len(), 0, "all objects in deleted namespace must be removed");
+
+    // The namespace object itself must also be gone.
+    let ns_objects = api
+        .get_objects(&GetObjectsFilter {
+            namespace: Some("system".into()),
+            kind: Some("namespace".into()),
+            name: Some("myns".into()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(ns_objects.len(), 0, "namespace object itself must be deleted");
+
+    Ok(())
+}
+
+/// Deleting a namespace is blocked when objects in OTHER namespaces hold FK
+/// references into it.
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn delete_namespace_blocked_by_cross_namespace_references(pool: PgPool) -> sqlx::Result<()> {
+    let api = spawn_server(pool).await;
+
+    // Create two namespaces.
+    for ns in ["ns-a", "ns-b"] {
+        api.apply_str(serde_json::to_string(&serde_json::json!({
+            "api_version": "v1", "kind": "namespace", "namespace": "system", "name": ns,
+        }))
+        .unwrap())
+        .await
+        .unwrap();
+    }
+
+    // Create a container in ns-a.
+    api.apply_str(serde_json::to_string(&serde_json::json!({
+        "api_version": "v1", "kind": "container",
+        "namespace": "ns-a", "name": "target", "nr": 1,
+    }))
+    .unwrap())
+    .await
+    .unwrap();
+
+    // Create a container in ns-b that references the one in ns-a via a
+    // cross-namespace FK (3-segment format: namespace/kind/name).
+    api.apply_str(serde_json::to_string(&serde_json::json!({
+        "api_version": "v1", "kind": "container",
+        "namespace": "ns-b", "name": "referrer", "nr": 2,
+        "parent": "ns-a/container/target",
+    }))
+    .unwrap())
+    .await
+    .unwrap();
+
+    // Deleting ns-a must be rejected because ns-b still references its object.
+    let result = api
+        .delete_object(&DeleteObject {
+            namespace: Some("system".into()),
+            kind: "namespace".into(),
+            name: "ns-a".into(),
+        })
+        .await;
+
+    assert!(result.is_err(), "delete of ns-a must be blocked by cross-namespace reference");
+    let dawnstore_client_lib::DawnstoreApiError::ServerError(err) = result.unwrap_err() else {
+        panic!("expected ServerError");
+    };
+    assert!(
+        matches!(err, dawnstore_lib::DawnStoreApiError::ValidationError { .. }),
+        "expected ValidationError, got {err:?}",
+    );
+
+    // ns-a objects must still exist.
+    let ns_a_objects = api
+        .get_objects(&GetObjectsFilter { namespace: Some("ns-a".into()), ..Default::default() })
+        .await
+        .unwrap();
+    assert_eq!(ns_a_objects.len(), 1, "ns-a objects must not be deleted");
+
+    // After deleting ns-b (removing the cross-namespace reference), ns-a can be deleted.
+    api.delete_object(&DeleteObject {
+        namespace: Some("system".into()),
+        kind: "namespace".into(),
+        name: "ns-b".into(),
+    })
+    .await
+    .unwrap();
+
+    api.delete_object(&DeleteObject {
+        namespace: Some("system".into()),
+        kind: "namespace".into(),
+        name: "ns-a".into(),
+    })
+    .await
+    .unwrap();
+
+    let ns_a_after = api
+        .get_objects(&GetObjectsFilter { namespace: Some("ns-a".into()), ..Default::default() })
+        .await
+        .unwrap();
+    assert_eq!(ns_a_after.len(), 0, "ns-a objects must be gone after cascade delete");
 
     Ok(())
 }

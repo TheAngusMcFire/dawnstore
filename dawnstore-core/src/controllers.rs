@@ -102,6 +102,19 @@ fn to_api_error(err: DawnStoreError) -> DawnStoreApiError {
                 message: format!("object is still referenced by: {referencing}"),
             }
         }
+        DawnStoreError::NamespaceNotFound(ns) => DawnStoreApiError::ValidationError {
+            name: ns.clone(),
+            message: format!("namespace '{ns}' does not exist"),
+        },
+        DawnStoreError::DeleteNamespaceBlockedByCrossNamespaceReferences {
+            namespace,
+            referencing,
+        } => DawnStoreApiError::ValidationError {
+            name: namespace,
+            message: format!(
+                "namespace cannot be deleted: objects inside it are still referenced from other namespaces by: {referencing}"
+            ),
+        },
         DawnStoreError::DatabaseError(_)
         | DawnStoreError::InternalServerError(_)
         | DawnStoreError::JsonSchemaValidatorCreationError(_) => DawnStoreApiError::InternalError,

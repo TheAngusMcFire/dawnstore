@@ -18,6 +18,8 @@ pub enum Event {
     ApiSuccess(String),
     /// An API call failed.
     ApiError(String),
+    /// The terminal was resized.
+    Resize,
 }
 
 /// Commands sent from the main loop to the API task, or handled by the

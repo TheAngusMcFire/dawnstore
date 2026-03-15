@@ -18,6 +18,7 @@ use crate::abstractions::{
 use crate::cache::DawnstoreCache;
 use crate::error::DawnStoreError;
 use crate::cache::{GrantedScope, Verb};
+use crate::rbac::constants::{KIND_NAMESPACE, SYSTEM_NAMESPACE};
 use crate::rbac::helpers::object_string_id;
 use crate::rbac::middleware::Claims;
 
@@ -30,16 +31,30 @@ pub struct MockBackend {
     pub objects: std::sync::Mutex<HashMap<String, Value>>,
     /// Inbound FK references: target string ID → list of referencing string IDs.
     pub inbound_refs: std::sync::Mutex<HashMap<String, Vec<String>>>,
+    /// Valid namespace names (used only by the namespace-existence check in apply).
+    /// Does not affect `get_objects` results — namespace objects are not stored here.
+    pub valid_namespaces: std::sync::Mutex<std::collections::HashSet<String>>,
 }
 
 impl MockBackend {
     pub fn new() -> Self {
+        let mut ns = std::collections::HashSet::new();
+        // Pre-register "default" so apply tests don't need to explicitly create
+        // a namespace object first. SYSTEM_NAMESPACE is always skipped by the check.
+        ns.insert("default".to_string());
         Self {
             schemas: vec![],
             fk_constraints: vec![],
             objects: std::sync::Mutex::new(HashMap::new()),
             inbound_refs: std::sync::Mutex::new(HashMap::new()),
+            valid_namespaces: std::sync::Mutex::new(ns),
         }
+    }
+
+    /// Register a namespace as valid for the namespace-existence check.
+    pub fn with_namespace(self, name: impl Into<String>) -> Self {
+        self.valid_namespaces.lock().unwrap().insert(name.into());
+        self
     }
 
     pub fn with_schema(mut self, schema: RawSchema) -> Self {
@@ -117,11 +132,27 @@ impl DawnstoreBackend for MockBackend {
         kind: &str,
         name: &str,
     ) -> impl Future<Output = Result<Option<ReturnObject<Value>>, DawnStoreError>> + Send {
-        let key = object_string_id(namespace, kind, name);
-        let result = {
-            let objects = self.objects.lock().unwrap();
-            objects.get(&key).map(|v| serde_json::from_value::<ReturnObject<Value>>(v.clone()).unwrap())
-        };
+        let result: Option<ReturnObject<Value>> =
+            if namespace == SYSTEM_NAMESPACE && kind == KIND_NAMESPACE {
+                // Intercept namespace-existence checks: return a synthetic object
+                // when the apply handler verifies that a namespace exists.
+                self.valid_namespaces.lock().unwrap().contains(name).then(|| ReturnObject {
+                    id: Uuid::new_v4(),
+                    created_at: Utc::now(),
+                    updated_at: Utc::now(),
+                    annotations: None,
+                    labels: None,
+                    namespace: SYSTEM_NAMESPACE.to_string(),
+                    api_version: "v1".to_string(),
+                    kind: KIND_NAMESPACE.to_string(),
+                    name: name.to_string(),
+                    spec: json!({}),
+                })
+            } else {
+                let key = object_string_id(namespace, kind, name);
+                let objects = self.objects.lock().unwrap();
+                objects.get(&key).map(|v| serde_json::from_value::<ReturnObject<Value>>(v.clone()).unwrap())
+            };
         async move { Ok(result) }
     }
 
@@ -180,6 +211,23 @@ impl DawnstoreBackend for MockBackend {
         &self,
         _schemas: &[crate::abstractions::SchemaDefinition],
     ) -> impl Future<Output = Result<(), DawnStoreError>> + Send {
+        async move { Ok(()) }
+    }
+
+    fn get_cross_namespace_inbound_references(
+        &self,
+        _namespace: &str,
+    ) -> impl Future<Output = Result<Vec<String>, DawnStoreError>> + Send {
+        // The mock backend does not track relations, so always return empty.
+        async move { Ok(vec![]) }
+    }
+
+    fn delete_objects_by_namespace(
+        &self,
+        namespace: &str,
+    ) -> impl Future<Output = Result<(), DawnStoreError>> + Send {
+        let prefix = format!("{namespace}/");
+        self.objects.lock().unwrap().retain(|key, _| !key.starts_with(&prefix));
         async move { Ok(()) }
     }
 }

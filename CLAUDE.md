@@ -2,6 +2,14 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Database
+
+```
+DATABASE_URL=postgresql://postgres:password@localhost:5435/testing
+```
+
+Use this URL when running `cargo sqlx prepare` to regenerate the offline query cache after adding or modifying `sqlx::query!` macros.
+
 ## Commands
 
 ```bash

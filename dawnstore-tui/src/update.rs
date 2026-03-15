@@ -42,6 +42,7 @@ pub fn update(app: &mut App, event: Event) -> Option<Command> {
                 kind: app.kind_filter.clone(),
             })
         }
+        Event::Resize => None,
         Event::ApiError(err) => {
             if app.suppress_errors_ticks > 0 {
                 debug!(err, "api error suppressed (user dismissed)");

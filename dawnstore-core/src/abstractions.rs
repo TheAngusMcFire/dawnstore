@@ -242,4 +242,23 @@ pub trait DawnstoreBackend: Send + Sync {
         &self,
         schemas: &[SchemaDefinition],
     ) -> impl Future<Output = Result<(), DawnStoreError>> + Send;
+
+    /// Return the string IDs (`namespace/kind/name`) of objects in OTHER namespaces
+    /// that hold an inbound FK relation pointing at any object inside `namespace`.
+    ///
+    /// Used by the delete handler to block namespace deletions that would leave
+    /// cross-namespace FK references dangling.
+    fn get_cross_namespace_inbound_references(
+        &self,
+        namespace: &str,
+    ) -> impl Future<Output = Result<Vec<String>, DawnStoreError>> + Send;
+
+    /// Delete all objects whose `namespace` field equals `namespace`.
+    ///
+    /// The `relations` table rows are removed automatically via `ON DELETE CASCADE`.
+    /// Does not delete the `Namespace` object itself (in the `system` namespace).
+    fn delete_objects_by_namespace(
+        &self,
+        namespace: &str,
+    ) -> impl Future<Output = Result<(), DawnStoreError>> + Send;
 }

@@ -839,6 +839,36 @@ pub async fn apply<B: DawnstoreBackend>(
         }
     }
 
+    // Step 4b: verify each target namespace actually exists (as a Namespace object
+    // in the system namespace). Skip for Namespace objects themselves (they are
+    // creating/updating a namespace) and for objects going into the system namespace
+    // (always considered valid, bootstrapped by the server).
+    //
+    // Namespaces are guaranteed to appear before the objects that use them
+    // (nav-prop extraction prepends dependencies). We therefore track namespaces
+    // created earlier in the batch on the fly: once we see a Namespace object for
+    // "X" we add it to `seen_ns` so subsequent objects in namespace "X" pass
+    // without a DB round-trip.
+    let mut seen_ns: HashSet<String> = HashSet::new();
+    let mut checked_namespaces: HashSet<String> = HashSet::new();
+    for obj in &objects {
+        let ns = obj.namespace.as_deref().unwrap_or("default");
+        let kind_raw = obj.kind.as_deref().unwrap_or("");
+        let resolved = cache.resolve_kind(kind_raw).await;
+        if resolved.as_deref() == Some(KIND_NAMESPACE) && ns == SYSTEM_NAMESPACE {
+            seen_ns.insert(obj.name.clone());
+            continue;
+        }
+        if ns == SYSTEM_NAMESPACE || seen_ns.contains(ns) {
+            continue;
+        }
+        if checked_namespaces.insert(ns.to_string()) {
+            if backend.get_object(SYSTEM_NAMESPACE, KIND_NAMESPACE, ns).await?.is_none() {
+                return Err(DawnStoreError::NamespaceNotFound(ns.to_string()));
+            }
+        }
+    }
+
     for obj in &objects {
         let namespace = obj.namespace.as_deref().unwrap_or("default");
         let kind = obj.kind.as_deref().ok_or(DawnStoreError::KindMissingInObject)?;

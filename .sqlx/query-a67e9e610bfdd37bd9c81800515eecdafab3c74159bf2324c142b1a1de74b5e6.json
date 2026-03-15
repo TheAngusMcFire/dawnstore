@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM objects WHERE namespace = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a67e9e610bfdd37bd9c81800515eecdafab3c74159bf2324c142b1a1de74b5e6"
+}

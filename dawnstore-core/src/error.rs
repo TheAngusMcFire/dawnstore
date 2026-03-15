@@ -90,4 +90,10 @@ pub enum DawnStoreError {
     InvalidObjectName(String),
     #[error("Object namespace '{0}' contains '/'; namespaces must not contain '/'")]
     InvalidObjectNamespace(String),
+    #[error("Namespace '{0}' does not exist; create the namespace before applying objects into it")]
+    NamespaceNotFound(String),
+    #[error(
+        "Cannot delete namespace '{namespace}': objects inside it are still referenced by objects in other namespaces: {referencing}"
+    )]
+    DeleteNamespaceBlockedByCrossNamespaceReferences { namespace: String, referencing: String },
 }

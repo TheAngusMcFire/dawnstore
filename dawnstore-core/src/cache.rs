@@ -333,6 +333,18 @@ impl DawnstoreCache {
 
     /// Evict the permission cache entry for a deleted `ServiceAccount`.
     ///
+    /// Clear the entire permission cache.
+    ///
+    /// Call this after deleting a namespace so that stale grants from role
+    /// bindings that lived inside it are not honoured by subsequent requests.
+    /// The next permission check will trigger a full rebuild from the backend.
+    pub fn clear_all_permissions(&self) {
+        let mut state = self.permission.write().unwrap();
+        state.permissions.clear();
+        state.resource_index.clear();
+        state.generation += 1;
+    }
+
     /// Call this after successfully deleting a `ServiceAccount` so that
     /// re-creation of an SA with the same `(namespace, name)` does not inherit
     /// stale grants from the old identity.

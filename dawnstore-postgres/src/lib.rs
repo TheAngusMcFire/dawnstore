@@ -312,6 +312,31 @@ impl DawnstoreBackend for PostgresBackend {
         }
     }
 
+    fn get_cross_namespace_inbound_references(
+        &self,
+        namespace: &str,
+    ) -> impl std::future::Future<Output = Result<Vec<String>, DawnStoreError>> + Send {
+        let pool = self.pool.clone();
+        let namespace = namespace.to_string();
+        async move {
+            let mut con = pool.acquire().await?;
+            Ok(queries::get_cross_namespace_inbound_references(con.as_mut(), &namespace).await?)
+        }
+    }
+
+    fn delete_objects_by_namespace(
+        &self,
+        namespace: &str,
+    ) -> impl std::future::Future<Output = Result<(), DawnStoreError>> + Send {
+        let pool = self.pool.clone();
+        let namespace = namespace.to_string();
+        async move {
+            let mut con = pool.acquire().await?;
+            queries::delete_objects_by_namespace(con.as_mut(), &namespace).await?;
+            Ok(())
+        }
+    }
+
     fn seed_schemas(
         &self,
         schemas: &[SchemaDefinition],

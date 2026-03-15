@@ -5,7 +5,7 @@ use crate::cache::DawnstoreCache;
 use crate::error::DawnStoreError;
 use crate::cache::{EffectivePermissions, Verb, is_superadmin};
 use crate::rbac::constants::{
-    KIND_GLOBAL_ROLE, KIND_GLOBAL_ROLE_BINDING, KIND_ROLE, KIND_ROLE_BINDING,
+    KIND_GLOBAL_ROLE, KIND_GLOBAL_ROLE_BINDING, KIND_NAMESPACE, KIND_ROLE, KIND_ROLE_BINDING,
     KIND_SERVICE_ACCOUNT, KIND_SERVICE_ACCOUNT_TOKEN,
 };
 use crate::rbac::helpers::object_string_id;
@@ -137,6 +137,23 @@ pub async fn delete<B: DawnstoreBackend>(
             target: object_string_id(namespace, &kind, &request.name),
             referencing: refs.join(", "),
         });
+    }
+
+    // Step 3b: for Namespace deletion, cascade-delete all objects in the namespace
+    // after verifying no cross-namespace FK references would be left dangling.
+    if kind == KIND_NAMESPACE {
+        let cross_refs =
+            backend.get_cross_namespace_inbound_references(&request.name).await?;
+        if !cross_refs.is_empty() {
+            return Err(DawnStoreError::DeleteNamespaceBlockedByCrossNamespaceReferences {
+                namespace: request.name.clone(),
+                referencing: cross_refs.join(", "),
+            });
+        }
+        // Delete all objects inside the namespace (relations cascade via FK).
+        backend.delete_objects_by_namespace(&request.name).await?;
+        // Wipe the permission cache — role bindings in this namespace are gone.
+        cache.clear_all_permissions();
     }
 
     // Step 4: if this is a ServiceAccountToken, fetch its UUID before deletion

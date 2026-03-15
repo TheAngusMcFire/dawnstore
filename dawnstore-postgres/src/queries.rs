@@ -377,3 +377,38 @@ pub async fn delete_multiple_relations(
 
     Ok(result.rows_affected())
 }
+
+/// Return the string IDs of objects in namespaces OTHER than `namespace` that
+/// hold an inbound FK relation pointing at any object inside `namespace`.
+pub async fn get_cross_namespace_inbound_references(
+    pool: &mut PgConnection,
+    namespace: &str,
+) -> Result<Vec<String>, sqlx::Error> {
+    sqlx::query_scalar!(
+        r#"
+        SELECT DISTINCT o.string_id
+        FROM relations r
+        JOIN objects o ON r.object_id = o.id
+        WHERE o.namespace != $1
+          AND r.foreign_object_id IN (
+              SELECT id FROM objects WHERE namespace = $1
+          )
+        "#,
+        namespace,
+    )
+    .fetch_all(pool)
+    .await
+}
+
+/// Delete all objects whose `namespace` equals `namespace`.
+///
+/// The `relations` table rows are removed automatically via `ON DELETE CASCADE`.
+pub async fn delete_objects_by_namespace(
+    pool: &mut PgConnection,
+    namespace: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query!("DELETE FROM objects WHERE namespace = $1", namespace)
+        .execute(pool)
+        .await?;
+    Ok(())
+}

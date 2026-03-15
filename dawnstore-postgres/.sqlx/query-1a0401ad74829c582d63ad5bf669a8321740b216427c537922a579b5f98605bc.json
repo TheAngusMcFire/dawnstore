@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT DISTINCT o.string_id\n        FROM relations r\n        JOIN objects o ON r.object_id = o.id\n        WHERE o.namespace != $1\n          AND r.foreign_object_id IN (\n              SELECT id FROM objects WHERE namespace = $1\n          )\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "string_id",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "1a0401ad74829c582d63ad5bf669a8321740b216427c537922a579b5f98605bc"
+}

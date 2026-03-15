@@ -70,12 +70,12 @@ pub fn schemas() -> Vec<SchemaDefinition> {
 
 // ── Seeding ───────────────────────────────────────────────────────────────────
 
-async fn seed_system_namespace<B: DawnstoreBackend>(backend: &B) -> Result<(), DawnStoreError> {
+async fn seed_namespace<B: DawnstoreBackend>(backend: &B, name: &str) -> Result<(), DawnStoreError> {
     let obj = crate::abstractions::Object {
         api_version: Some(API_VERSION_V1.to_string()),
         kind: Some(KIND_NAMESPACE.to_string()),
         namespace: Some(SYSTEM_NAMESPACE.to_string()),
-        name: SYSTEM_NAMESPACE.to_string(),
+        name: name.to_string(),
         spec: Namespace {},
         id: None,
         created_at: None,
@@ -106,12 +106,14 @@ async fn seed_superadmin<B: DawnstoreBackend>(backend: &B) -> Result<(), DawnSto
     Ok(())
 }
 
-/// Seed all RBAC schemas, the `system` namespace, and the `superadmin` service account.
+/// Seed all RBAC schemas, the `system` and `default` namespaces, and the
+/// `superadmin` service account.
 ///
 /// Idempotent — safe to call on every startup.
 pub async fn init<B: DawnstoreBackend>(backend: &B) -> Result<(), DawnStoreError> {
     backend.seed_schemas(&schemas()).await?;
-    seed_system_namespace(backend).await?;
+    seed_namespace(backend, SYSTEM_NAMESPACE).await?;
+    seed_namespace(backend, "default").await?;
     seed_superadmin(backend).await
 }
 

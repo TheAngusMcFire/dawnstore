@@ -128,6 +128,11 @@ async fn main() -> Result<()> {
                         break;
                     }
                 }
+                Ok(crossterm::event::Event::Resize(_, _)) => {
+                    if input_tx.blocking_send(event::Event::Resize).is_err() {
+                        break;
+                    }
+                }
                 Ok(_) => {}
                 Err(_) => break,
             },
