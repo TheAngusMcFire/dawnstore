@@ -2,7 +2,7 @@ use ratatui::{
     Frame,
     layout::Rect,
     style::{Color, Style},
-    widgets::{Block, Borders, Paragraph, Wrap},
+    widgets::{Block, Borders, Padding, Paragraph, Wrap},
 };
 
 use crate::app::App;
@@ -15,9 +15,10 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
     };
 
     let block = Block::default()
-        .title(" Detail  [e] edit  [d] delete  [q/Esc] back ")
+        .title(" Detail  [e] edit  [D] delete  [r] refresh  [q/Esc] back ")
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan));
+        .border_style(Style::default().fg(Color::Cyan))
+        .padding(Padding::new(1, 1, 1, 0));
 
     frame.render_widget(
         Paragraph::new(yaml)

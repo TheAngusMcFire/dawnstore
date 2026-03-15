@@ -15,6 +15,7 @@ pub enum DawnstoreApiError {
     ServerError(DawnStoreApiError),
 }
 
+#[derive(Clone)]
 pub struct Api {
     base_url: String,
     client: Client,

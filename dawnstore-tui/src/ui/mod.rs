@@ -104,8 +104,8 @@ fn render_footer(app: &App, frame: &mut Frame, area: ratatui::layout::Rect) {
                 (format!(" {status}"), Style::default().fg(Color::Green))
             } else {
                 (
-                    " [j/k] navigate  [Enter] detail  [d] delete  [/] filter  [n] ns  [:] cmd  [?] help  [q] quit".to_string(),
-                    Style::default().fg(Color::DarkGray),
+                    " [j/k] navigate  [Enter/e] detail/edit  [D] delete  [r] refresh  [/] filter  [n] ns  [:] cmd  [?] help  [q] quit".to_string(),
+                    Style::default().fg(Color::Cyan),
                 )
             }
         }

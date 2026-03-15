@@ -23,10 +23,10 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
         .iter()
         .map(|obj| {
             Row::new([
-                Cell::from(obj.namespace.clone()),
+                Cell::from(obj.namespace.clone()).style(Style::new().fg(Color::Yellow)),
                 Cell::from(obj.name.clone()),
-                Cell::from(obj.kind.clone()),
-                Cell::from(age(&obj.created_at)),
+                Cell::from(obj.kind.clone()).style(Style::new().fg(Color::Cyan)),
+                Cell::from(age(&obj.created_at)).style(Style::new().fg(Color::Magenta)),
             ])
         })
         .collect();

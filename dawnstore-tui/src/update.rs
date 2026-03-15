@@ -117,11 +117,24 @@ fn handle_resource_list(app: &mut App, key: crossterm::event::KeyEvent) -> Optio
                 app.view = View::Detail;
             }
         }
-        KeyCode::Char('d') => {
+        KeyCode::Char('e') => {
+            if app.selected_object().is_some() {
+                app.detail_scroll = 0;
+                app.view = View::Detail;
+                return Some(Command::OpenEditor);
+            }
+        }
+        KeyCode::Char('D') => {
             if app.selected_object().is_some() {
                 app.confirm_return_view = View::ResourceList;
                 app.view = View::Confirm;
             }
+        }
+        KeyCode::Char('r') => {
+            return Some(Command::Refresh {
+                namespace: if app.all_namespaces { None } else { Some(app.namespace.clone()) },
+                kind: app.kind_filter.clone(),
+            });
         }
         KeyCode::Char('/') => {
             app.filtering = true;
@@ -177,11 +190,17 @@ fn handle_detail(app: &mut App, key: crossterm::event::KeyEvent) -> Option<Comma
                 return Some(Command::OpenEditor);
             }
         }
-        KeyCode::Char('d') => {
+        KeyCode::Char('D') => {
             if app.selected_object().is_some() {
                 app.confirm_return_view = View::Detail;
                 app.view = View::Confirm;
             }
+        }
+        KeyCode::Char('r') => {
+            return Some(Command::Refresh {
+                namespace: if app.all_namespaces { None } else { Some(app.namespace.clone()) },
+                kind: app.kind_filter.clone(),
+            });
         }
         KeyCode::Esc | KeyCode::Char('q') => {
             app.view = View::ResourceList;
