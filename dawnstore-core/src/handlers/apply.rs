@@ -91,6 +91,20 @@ fn has_permission(
         || perms.global.iter().any(check)
 }
 
+/// Load the effective permissions for `caller` from the cache, rebuilding from
+/// `backend` on a miss.
+async fn get_or_load_permissions<B: DawnstoreBackend>(
+    cache: &DawnstoreCache,
+    backend: &B,
+    caller: &Claims,
+) -> Result<EffectivePermissions, DawnStoreError> {
+    if let Some(perms) = cache.get_permissions(&caller.namespace, &caller.sub) {
+        return Ok(perms);
+    }
+    cache.init_permission(backend).await?;
+    Ok(cache.get_permissions(&caller.namespace, &caller.sub).unwrap_or_default())
+}
+
 /// Verify that `caller` holds `verb` permission on `(namespace, kind, name)`.
 ///
 /// When `caller` is `None` (unauthenticated / superadmin path) the check is
@@ -116,20 +130,7 @@ async fn check_permission<B: DawnstoreBackend>(
     if is_superadmin(caller) {
         return Ok(()); // superadmin bypasses all permission checks
     }
-
-    // Fast path: check the in-memory cache.
-    if let Some(perms) = cache.get_permissions(&caller.namespace, &caller.sub) {
-        return if has_permission(&perms, verb, &caller.namespace, namespace, kind, name) {
-            Ok(())
-        } else {
-            Err(DawnStoreError::Forbidden)
-        };
-    }
-
-    // Cache miss: rebuild the full permission cache from the backend, then
-    // re-evaluate. The SA will have empty permissions if not in any binding.
-    cache.init_permission(backend).await?;
-    let perms = cache.get_permissions(&caller.namespace, &caller.sub).unwrap_or_default();
+    let perms = get_or_load_permissions(cache, backend, caller).await?;
     if has_permission(&perms, verb, &caller.namespace, namespace, kind, name) {
         Ok(())
     } else {
@@ -581,19 +582,27 @@ fn caller_can_grant_rule(
 }
 
 /// Retrieve the spec JSON for an object by its canonical `namespace/kind/name`
-/// string ID. Checks `batch` first so objects in the same apply request can
-/// reference each other without a round-trip; falls back to `backend`.
-async fn get_spec_by_sid<B: DawnstoreBackend>(
-    batch: &HashMap<String, serde_json::Value>,
+/// string ID. Checks `spec_cache` first (populated with batch objects and
+/// previously fetched specs); on a miss, fetches from `backend` and caches the
+/// result so subsequent lookups for the same SID are free.
+async fn get_or_fetch_spec<B: DawnstoreBackend>(
+    spec_cache: &mut HashMap<String, serde_json::Value>,
     backend: &B,
     sid: &str,
 ) -> Result<Option<serde_json::Value>, DawnStoreError> {
-    if let Some(spec) = batch.get(sid) {
+    if let Some(spec) = spec_cache.get(sid) {
         return Ok(Some(spec.clone()));
     }
     let parts: Vec<&str> = sid.splitn(3, '/').collect();
     match parts.as_slice() {
-        [ns, kind, name] => Ok(backend.get_object(ns, kind, name).await?.map(|o| o.spec)),
+        [ns, kind, name] => {
+            if let Some(obj) = backend.get_object(ns, kind, name).await? {
+                spec_cache.insert(sid.to_string(), obj.spec.clone());
+                Ok(Some(obj.spec))
+            } else {
+                Ok(None)
+            }
+        }
         _ => Ok(None),
     }
 }
@@ -621,33 +630,42 @@ async fn check_rbac_escalation<B: DawnstoreBackend>(
         return Ok(());
     }
 
-    // Load caller's effective permissions (cache hit fast path, miss rebuild).
-    let perms = if let Some(p) = cache.get_permissions(&caller.namespace, &caller.sub) {
-        p
-    } else {
-        cache.init_permission(backend).await?;
-        cache.get_permissions(&caller.namespace, &caller.sub).unwrap_or_default()
-    };
-
-    // Build a batch spec index: canonical `namespace/kind/name` → spec JSON.
-    // Alias-resolve every kind so FK lookups against this index always use the
-    // canonical form (e.g. `"ro"` → `"role"`).
-    let mut batch: HashMap<String, serde_json::Value> = HashMap::new();
-    for obj in objects {
-        let ns = obj.namespace.as_deref().unwrap_or("default");
-        let raw_kind = obj.kind.as_deref().unwrap_or("");
-        let canonical_kind =
-            cache.resolve_kind(raw_kind).await.unwrap_or_else(|| raw_kind.to_string());
-        let sid = object_string_id(ns, &canonical_kind, &obj.name);
-        batch.insert(sid, obj.spec.clone());
+    // Early exit: skip the check entirely if no RBAC objects are present.
+    // This is the common case for non-RBAC apply requests.
+    let has_rbac = objects.iter().any(|obj| {
+        matches!(
+            obj.kind.as_deref(),
+            Some(KIND_ROLE)
+                | Some(KIND_GLOBAL_ROLE)
+                | Some(KIND_ROLE_BINDING)
+                | Some(KIND_GLOBAL_ROLE_BINDING)
+        )
+    });
+    if !has_rbac {
+        return Ok(());
     }
 
+    let perms = get_or_load_permissions(cache, backend, caller).await?;
+
+    // Single pass: resolve each kind alias once and index Role/GlobalRole specs.
+    // Only those two kinds are ever referenced by bindings, so only their specs
+    // need to be in the cache. Backend fetches for the same role are deduplicated
+    // via the same cache in `get_or_fetch_spec`.
+    let mut resolved: Vec<(String, String)> = Vec::with_capacity(objects.len());
+    let mut spec_cache: HashMap<String, serde_json::Value> = HashMap::new();
     for obj in objects {
-        let ns = obj.namespace.as_deref().unwrap_or("default");
+        let ns = obj.namespace.as_deref().unwrap_or("default").to_string();
         let raw_kind = obj.kind.as_deref().unwrap_or("");
         let canonical_kind =
             cache.resolve_kind(raw_kind).await.unwrap_or_else(|| raw_kind.to_string());
+        if matches!(canonical_kind.as_str(), KIND_ROLE | KIND_GLOBAL_ROLE) {
+            let sid = object_string_id(&ns, &canonical_kind, &obj.name);
+            spec_cache.insert(sid, obj.spec.clone());
+        }
+        resolved.push((ns, canonical_kind));
+    }
 
+    for (obj, (ns, canonical_kind)) in objects.iter().zip(resolved.iter()) {
         match canonical_kind.as_str() {
             KIND_ROLE => {
                 let role: Role = serde_json::from_value(obj.spec.clone())?;
@@ -668,9 +686,15 @@ async fn check_rbac_escalation<B: DawnstoreBackend>(
             }
             KIND_ROLE_BINDING => {
                 let binding: RoleBinding = serde_json::from_value(obj.spec.clone())?;
+                // Schema validation guarantees the FK string has 1–3 segments; the
+                // map_err converts the impossible error to an InternalServerError.
                 let role_sid = resolve_fk_string(&binding.role, ns, Some(KIND_ROLE))
-                    .unwrap_or_else(|_| object_string_id(ns, KIND_ROLE, &binding.role));
-                if let Some(role_spec) = get_spec_by_sid(&batch, backend, &role_sid).await? {
+                    .map_err(|_| DawnStoreError::InternalServerError(
+                        format!("malformed role FK in validated RoleBinding spec: {}", binding.role),
+                    ))?;
+                if let Some(role_spec) =
+                    get_or_fetch_spec(&mut spec_cache, backend, &role_sid).await?
+                {
                     let role: Role = serde_json::from_value(role_spec)?;
                     for rule in &role.rules {
                         if !caller_can_grant_rule(&perms, rule, &caller.namespace, ns, false) {
@@ -683,8 +707,12 @@ async fn check_rbac_escalation<B: DawnstoreBackend>(
             KIND_GLOBAL_ROLE_BINDING => {
                 let binding: GlobalRoleBinding = serde_json::from_value(obj.spec.clone())?;
                 let role_sid = resolve_fk_string(&binding.role, ns, Some(KIND_GLOBAL_ROLE))
-                    .unwrap_or_else(|_| object_string_id(ns, KIND_GLOBAL_ROLE, &binding.role));
-                if let Some(role_spec) = get_spec_by_sid(&batch, backend, &role_sid).await? {
+                    .map_err(|_| DawnStoreError::InternalServerError(
+                        format!("malformed role FK in validated GlobalRoleBinding spec: {}", binding.role),
+                    ))?;
+                if let Some(role_spec) =
+                    get_or_fetch_spec(&mut spec_cache, backend, &role_sid).await?
+                {
                     let role: GlobalRole = serde_json::from_value(role_spec)?;
                     for rule in &role.rules {
                         if !caller_can_grant_rule(&perms, rule, &caller.namespace, ns, true) {
