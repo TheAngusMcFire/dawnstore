@@ -2170,3 +2170,69 @@ async fn namespaced_caller_cannot_create_global_role(pool: PgPool) -> sqlx::Resu
 
     Ok(())
 }
+
+// ── Problem 6: SA deletion must evict its permission cache entry ──────────────
+
+/// Deleting a `ServiceAccount` must clear its cached permissions so that a
+/// new SA created with the same (namespace, name) does not inherit the old
+/// SA's grants.
+///
+/// Test scenario: alice is granted editor access, her SA is fully deleted (tokens
+/// → rolebinding → SA), then a new alice SA is created with no bindings and
+/// issued a fresh token. The new alice must have no permissions.
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn deleted_sa_does_not_leak_permissions_to_recreated_sa(pool: PgPool) -> sqlx::Result<()> {
+    let server = spawn_rbac_server(pool).await;
+    let sa = &server.bootstrap_token;
+
+    // Setup: namespace, old alice with editor access.
+    http_apply(&server, sa, serde_json::json!([
+        {"api_version": "v1", "kind": "namespace", "namespace": "system", "name": "recycled-ns"},
+        {"api_version": "v1", "kind": "serviceaccount", "namespace": "recycled-ns", "name": "alice"}
+    ])).await;
+
+    http_apply(&server, sa, serde_json::json!({
+        "api_version": "v1", "kind": "role", "namespace": "recycled-ns", "name": "editor",
+        "rules": [{"api_version": "*", "kinds": ["container"], "verbs": ["get", "apply", "delete"]}]
+    })).await;
+
+    http_apply(&server, sa, serde_json::json!({
+        "api_version": "v1", "kind": "rolebinding", "namespace": "recycled-ns", "name": "bind-alice",
+        "role": "role/editor", "subjects": ["serviceaccount/alice"]
+    })).await;
+
+    let alice_jwt = issue_jwt(&server, "recycled-ns", "alice", "alice-token").await;
+
+    // Warm the cache: alice makes a request so her permissions are loaded.
+    let r = http_apply(&server, &alice_jwt, serde_json::json!({
+        "api_version": "v2", "kind": "container", "namespace": "recycled-ns", "name": "box1", "nr": 1
+    })).await;
+    assert!(r["error"].is_null(), "old alice must be able to apply: {r}");
+
+    // Tear down alice: token → rolebinding → SA (FK constraints require this order).
+    http_delete(&server, sa, serde_json::json!({
+        "namespace": "recycled-ns", "kind": "serviceaccounttoken", "name": "alice-token"
+    })).await;
+    http_delete(&server, sa, serde_json::json!({
+        "namespace": "recycled-ns", "kind": "rolebinding", "name": "bind-alice"
+    })).await;
+    http_delete(&server, sa, serde_json::json!({
+        "namespace": "recycled-ns", "kind": "serviceaccount", "name": "alice"
+    })).await;
+
+    // Re-create alice with NO rolebinding (no permissions).
+    http_apply(&server, sa, serde_json::json!({
+        "api_version": "v1", "kind": "serviceaccount", "namespace": "recycled-ns", "name": "alice"
+    })).await;
+
+    let new_alice_jwt = issue_jwt(&server, "recycled-ns", "alice", "alice-token2").await;
+
+    // New alice must not inherit old alice's cached permissions.
+    let r = http_apply(&server, &new_alice_jwt, serde_json::json!({
+        "api_version": "v2", "kind": "container", "namespace": "recycled-ns", "name": "box2", "nr": 2
+    })).await;
+    assert!(!r["error"].is_null(), "new alice must not inherit old alice's permissions: {r}");
+    assert_eq!(r["error"]["type"], "forbidden", "expected forbidden: {r}");
+
+    Ok(())
+}

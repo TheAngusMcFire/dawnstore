@@ -284,6 +284,16 @@ impl DawnstoreCache {
         }
     }
 
+    /// Evict the permission cache entry for a deleted `ServiceAccount`.
+    ///
+    /// Call this after successfully deleting a `ServiceAccount` so that
+    /// re-creation of an SA with the same `(namespace, name)` does not inherit
+    /// stale grants from the old identity.
+    pub fn invalidate_sa_permissions(&self, namespace: &str, sa_name: &str) {
+        let key = (namespace.to_string(), sa_name.to_string());
+        self.permission.write().unwrap().permissions.remove(&key);
+    }
+
     /// Evict all permission cache entries derived from `rbac_object_string_id`.
     ///
     /// Call this after a successful apply/delete of a role, rolebinding,

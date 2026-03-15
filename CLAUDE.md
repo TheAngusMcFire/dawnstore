@@ -127,7 +127,7 @@ Nav-props are spec fields whose name ends in `_object` (singular FK) or `_object
 | 3 | Namespace restriction bypassed by embedding a `Namespace` object in a nav-prop field | `controllers.rs`, `handlers/apply.rs` |
 | 4 | No RBAC escalation prevention — Apply on `role`/`rolebinding` allows self-elevation | `handlers/apply.rs` |
 | 5 | ~~`issue_token` skips FK validation — token can reference a non-existent `ServiceAccount`~~ **FIXED** | `controllers.rs` |
-| 6 | Deleting a `ServiceAccount` does not invalidate its cached permissions | `handlers/delete.rs`, `cache.rs` |
+| 6 | ~~Deleting a `ServiceAccount` does not invalidate its cached permissions~~ **FIXED** | `handlers/delete.rs`, `cache.rs` |
 | 7 | Concurrent cache miss → N parallel full DB scans with no deduplication | `cache.rs` |
 | 8 | Object names with `/` create ambiguous string IDs | `handlers/apply.rs`, `rbac/helpers.rs` |
 | 9 | Any `_object`/`_objects` spec field is silently extracted; failed deserialization is swallowed | `handlers/apply.rs` |

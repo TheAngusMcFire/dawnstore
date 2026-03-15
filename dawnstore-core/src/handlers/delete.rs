@@ -6,7 +6,7 @@ use crate::error::DawnStoreError;
 use crate::cache::{EffectivePermissions, Verb, is_superadmin};
 use crate::rbac::constants::{
     KIND_GLOBAL_ROLE, KIND_GLOBAL_ROLE_BINDING, KIND_ROLE, KIND_ROLE_BINDING,
-    KIND_SERVICE_ACCOUNT_TOKEN,
+    KIND_SERVICE_ACCOUNT, KIND_SERVICE_ACCOUNT_TOKEN,
 };
 use crate::rbac::helpers::object_string_id;
 use crate::rbac::middleware::Claims;
@@ -93,6 +93,12 @@ fn is_token_kind(kind: &str) -> bool {
     kind == KIND_SERVICE_ACCOUNT_TOKEN
 }
 
+/// Returns `true` if `kind` is a `ServiceAccount` whose deletion must evict
+/// its permission cache entry.
+fn is_service_account_kind(kind: &str) -> bool {
+    kind == KIND_SERVICE_ACCOUNT
+}
+
 // ── Public API ────────────────────────────────────────────────────────────────
 
 /// Delete the object identified by `request`, enforcing RBAC for authenticated callers.
@@ -151,6 +157,13 @@ pub async fn delete<B: DawnstoreBackend>(
     // Step 7: revoke the JWT for a deleted ServiceAccountToken.
     if let Some(token_id) = token_id_to_revoke {
         cache.remove_token(token_id);
+    }
+
+    // Step 8: evict the permission cache entry for a deleted ServiceAccount so
+    // that re-creating an SA with the same (namespace, name) does not inherit
+    // stale grants from the old identity.
+    if is_service_account_kind(&kind) {
+        cache.invalidate_sa_permissions(namespace, &request.name);
     }
 
     Ok(())
