@@ -19,6 +19,12 @@ fn api_err(e: impl std::fmt::Debug) -> color_eyre::eyre::Error {
 
 #[tokio::main]
 async fn main() -> color_eyre::Result<()> {
+    // Handle `completions` before full parsing so --context-path isn't required.
+    if std::env::args().any(|a| a == "completions") {
+        args::Commands::print_completions();
+        return Ok(());
+    }
+
     let args = args::Cli::parse();
     let file = std::fs::read_to_string(&args.context_path)?;
     let context = serde_yml::from_str::<config::Context>(&file)?;
@@ -29,6 +35,7 @@ async fn main() -> color_eyre::Result<()> {
         Some(t) => dawnstore_client_lib::Api::new_with_token(&context.url, t),
         None => dawnstore_client_lib::Api::new(&context.url),
     };
+
     let ns = args.namespace.as_deref().unwrap_or("default");
 
     match &args.command {
@@ -219,6 +226,7 @@ async fn main() -> color_eyre::Result<()> {
                 .iter()
                 .for_each(|x| println!("{}", x.name));
         }
+        args::Commands::Completions => unreachable!("handled before api setup"),
     }
     Ok(())
 }

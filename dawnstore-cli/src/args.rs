@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -61,4 +61,18 @@ pub enum Commands {
     Edit { resource: String, item_name: String },
     /// Apply resource from file
     Apply { path: String },
+    /// Print a nushell completion script to stdout
+    Completions,
+}
+
+impl Commands {
+    /// Generate and print the nushell completion script.
+    pub fn print_completions() {
+        clap_complete::generate(
+            clap_complete_nushell::Nushell,
+            &mut Cli::command(),
+            "kubectl-lite",
+            &mut std::io::stdout(),
+        );
+    }
 }
