@@ -564,6 +564,8 @@ async fn nav_prop_round_trip_still_works(pool: PgPool) -> sqlx::Result<()> {
     api.apply_str(container("parent-box", 10)).await.unwrap();
 
     // Apply child with a fully-embedded parent_object (round-trip scenario).
+    // Note: ObjectAny uses #[serde(flatten)] for spec, so container fields (nr)
+    // live at the top level of the object, not nested under a "spec" key.
     let result = api
         .apply_str(serde_json::to_string(&serde_json::json!({
             "api_version": "v1",
@@ -575,7 +577,7 @@ async fn nav_prop_round_trip_still_works(pool: PgPool) -> sqlx::Result<()> {
                 "api_version": "v1",
                 "kind": "container",
                 "name": "parent-box",
-                "spec": { "nr": 10 }
+                "nr": 10
             }
         })).unwrap())
         .await;
@@ -1031,11 +1033,10 @@ async fn issue_token_rejects_slash_in_name(pool: PgPool) -> sqlx::Result<()> {
 
     // First create a valid SA to be sure the rejection isn't hitting the SA check.
     let sa_resp = http_apply(&server, &server.bootstrap_token, serde_json::json!({
-        "apiVersion": "v1",
-        "kind": "ServiceAccount",
+        "api_version": "v1",
+        "kind": "serviceaccount",
         "namespace": "system",
-        "name": "valid-sa",
-        "spec": {}
+        "name": "valid-sa"
     })).await;
     assert!(sa_resp["error"].is_null(), "SA creation must succeed: {sa_resp}");
 
