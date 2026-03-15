@@ -1,4 +1,7 @@
 pub use dawnstore_lib::*;
+
+mod context;
+pub use context::Context;
 use reqwest::{Client, Method, RequestBuilder};
 use serde::{Serialize, de::DeserializeOwned};
 

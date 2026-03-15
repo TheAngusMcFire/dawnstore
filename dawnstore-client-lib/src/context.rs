@@ -1,3 +1,5 @@
+/// Parsed representation of the YAML context file pointed to by
+/// `--context-path` / `DAWNSTORE_CONTEXT`.
 #[derive(serde::Deserialize)]
 pub struct Context {
     pub url: String,

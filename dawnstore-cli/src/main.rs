@@ -7,7 +7,6 @@ use serde_json::Value;
 use tempfile::NamedTempFile;
 
 mod args;
-mod config;
 mod utils;
 
 /// Convert an API error to an eyre error using the Debug representation so
@@ -37,7 +36,7 @@ async fn main() -> color_eyre::Result<()> {
             args.context_path
         )
     })?;
-    let context = serde_yml::from_str::<config::Context>(&file)?;
+    let context = serde_yml::from_str::<dawnstore_client_lib::Context>(&file)?;
 
     // Token priority: --token / DAWNSTORE_TOKEN env var > context file token field.
     let token = args.token.or(context.token);

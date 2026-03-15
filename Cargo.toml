@@ -2,7 +2,7 @@
 
 resolver = "2"
 
-members = ["dawnstore-api", "dawnstore-cli", "dawnstore-client-lib", "dawnstore-core", "dawnstore-lib", "dawnstore-postgres", "dawnstore-testing"]
+members = ["dawnstore-api", "dawnstore-cli", "dawnstore-client-lib", "dawnstore-core", "dawnstore-lib", "dawnstore-postgres", "dawnstore-testing", "dawnstore-tui"]
 
 [workspace.dependencies]
 thiserror = { version = "2.0.17" }
@@ -14,6 +14,9 @@ chrono = { version = "0.4", features = ["serde"] }
 tokio = { version = "1.49.0", features = ["full"] }
 axum = { version = "0.8" }
 tracing = { version = "0" }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = { version = "0.2" }
+serde_yml = { version = "0.0.12" }
 schemars = { version = "1.2.0", features = ["chrono04", "uuid1"] }
 jsonschema = { version = "0.38" }
 jsonwebtoken = { version = "9" }
