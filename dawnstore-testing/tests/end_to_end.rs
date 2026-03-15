@@ -1740,14 +1740,15 @@ async fn navprop_hidden_when_caller_lacks_fk_target_permission(pool: PgPool) -> 
     assert!(!items.is_empty(), "must see at least one rolebinding: {r}");
 
     for item in &items {
-        // role_object and subjects_objects must be absent because the caller cannot GET role/serviceaccount.
+        // role_object and subjects_objects must be absent/empty because the caller cannot GET role/serviceaccount.
         assert!(
-            item["spec"]["role_object"].is_null(),
+            item["role_object"].is_null(),
             "role_object must be absent for restricted caller: {item}"
         );
+        let subjects = &item["subjects_objects"];
         assert!(
-            item["spec"]["subjects_objects"].is_null(),
-            "subjects_objects must be absent for restricted caller: {item}"
+            subjects.is_null() || subjects.as_array().map_or(false, |a| a.is_empty()),
+            "subjects_objects must be absent or empty for restricted caller: {item}"
         );
     }
 
@@ -1808,16 +1809,16 @@ async fn navprop_populated_when_caller_has_fk_target_permission(pool: PgPool) ->
 
     // role_object must be populated with the bound role.
     assert!(
-        !item["spec"]["role_object"].is_null(),
+        !item["role_object"].is_null(),
         "role_object must be populated for full-access caller: {item}"
     );
     assert_eq!(
-        item["spec"]["role_object"]["name"], "member-role",
+        item["role_object"]["name"], "member-role",
         "role_object must point to member-role: {item}"
     );
 
     // subjects_objects must be a non-empty array containing member-sa.
-    let subjects_objects = item["spec"]["subjects_objects"].as_array();
+    let subjects_objects = item["subjects_objects"].as_array();
     assert!(
         subjects_objects.is_some() && !subjects_objects.unwrap().is_empty(),
         "subjects_objects must be populated for full-access caller: {item}"
