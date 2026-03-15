@@ -1,6 +1,4 @@
-use std::collections::HashMap;
 use std::future::Future;
-use std::sync::RwLock;
 
 pub use dawnstore_lib::*;
 use schemars::JsonSchema;
@@ -52,32 +50,6 @@ pub enum ForeignKeyBehaviour {
     Ignore,
 }
 
-// ── ResourceCache ─────────────────────────────────────────────────────────────
-
-/// An in-memory mapping from every alias (and canonical kind name) to its
-/// canonical kind name.  Used by the default trait methods to transparently
-/// resolve aliases before hitting the backend.
-#[derive(Default)]
-pub struct ResourceCache(RwLock<HashMap<String, String>>);
-
-impl ResourceCache {
-    /// Register a kind together with all its aliases.
-    /// The kind itself is also registered so exact-kind lookups always succeed.
-    pub fn add(&self, kind: &str, aliases: &[String]) {
-        let mut map = self.0.write().unwrap();
-        map.insert(kind.to_string(), kind.to_string());
-        for alias in aliases {
-            map.insert(alias.clone(), kind.to_string());
-        }
-    }
-
-    /// Resolve an alias (or exact kind) to the canonical kind name.
-    /// Returns `None` if the alias is not registered.
-    pub fn resolve(&self, alias: &str) -> Option<String> {
-        self.0.read().unwrap().get(alias).cloned()
-    }
-}
-
 // ── SchemaDefinition ──────────────────────────────────────────────────────────
 
 /// A single schema registration — kind, api_version, aliases, FK constraints,
@@ -108,7 +80,7 @@ impl SchemaDefinition {
     }
 }
 
-// ── NewDawnStoreBackend shared types ─────────────────────────────────────────
+// ── DawnstoreBackend shared types ─────────────────────────────────────────
 
 /// A single FK edge produced by the apply handler's FK graph walk.
 ///
@@ -124,7 +96,7 @@ pub struct ObjectRelation {
     pub target_string_id: String,
 }
 
-// ── NewDawnStoreBackend raw data types ────────────────────────────────────────
+// ── DawnstoreBackend raw data types ────────────────────────────────────────
 
 /// A raw schema entry as returned by the backend — used to populate the schema cache.
 #[derive(Clone)]
@@ -148,9 +120,9 @@ pub struct RawForeignKeyConstraint {
     pub parent_key_path: Option<String>,
 }
 
-// ── NewDawnStoreBackend trait ─────────────────────────────────────────────────
+// ── DawnstoreBackend trait ─────────────────────────────────────────────────
 
-/// Filter type used by [`NewDawnStoreBackend::get_objects`].
+/// Filter type used by [`DawnstoreBackend::get_objects`].
 ///
 /// A focused alternative to [`GetObjectsFilter`] that only exposes the fields
 /// needed by the cache initialisation routines and the get handler.
@@ -172,7 +144,7 @@ pub struct BackendGetObjectsFilter {
 ///
 /// Implementations provide the raw data required to populate [`crate::cache::DawnstoreCache`].
 /// This trait will eventually replace [`DawnstoreBackend`].
-pub trait NewDawnStoreBackend: Send + Sync {
+pub trait DawnstoreBackend: Send + Sync {
     /// Return all registered schemas. Used by the schema cache initialiser.
     fn load_all_schemas(
         &self,
@@ -240,107 +212,11 @@ pub trait NewDawnStoreBackend: Send + Sync {
         kind: &str,
         name: &str,
     ) -> impl Future<Output = Result<Vec<String>, DawnStoreError>> + Send;
-}
 
-// ── DawnstoreBackend trait ────────────────────────────────────────────────────
-
-pub trait DawnstoreBackend: Send + Sync {
-    // ── Required methods ──────────────────────────────────────────────────────
-
-    /// Returns the alias cache for this backend instance.
-    fn resource_cache(&self) -> &ResourceCache;
-
-    /// Seed multiple schemas in a single transaction. Schemas that already
-    /// exist (matched by api_version + kind) are skipped.
-    /// Implementations must also call `self.resource_cache().add(kind, aliases)`
-    /// for every newly seeded schema so that alias resolution stays up to date.
-    fn seed_schema(
+    /// Persist schema registrations (kind, api_version, aliases, FK constraints).
+    /// Schemas that already exist are skipped (idempotent).
+    fn seed_schemas(
         &self,
         schemas: &[SchemaDefinition],
     ) -> impl Future<Output = Result<(), DawnStoreError>> + Send;
-
-    fn apply_raw(
-        &self,
-        data: serde_json::Value,
-    ) -> impl Future<Output = Result<Vec<ReturnObject<serde_json::Value>>, DawnStoreError>> + Send;
-
-    fn get_impl(
-        &self,
-        filter: &GetObjectsFilter,
-    ) -> impl Future<Output = Result<Vec<ReturnObject<serde_json::Value>>, DawnStoreError>> + Send;
-
-    fn delete_impl(
-        &self,
-        delete: &DeleteObject,
-    ) -> impl Future<Output = Result<(), DawnStoreError>> + Send;
-
-    fn get_resource_definition(
-        &self,
-        filter: &GetResourceDefinitionFilter,
-    ) -> impl Future<Output = Result<Vec<ResourceDefinition>, DawnStoreError>> + Send;
-
-    fn get_object_infos_impl(
-        &self,
-        filter: &GetObjectInfosFilter,
-    ) -> impl Future<Output = Result<ObjectInfos, DawnStoreError>> + Send;
-
-    /// Extract all FK-referenced object string IDs (`ns/kind/name`) from `spec`
-    /// for the given `(api_version, kind)`. Used by the controller to check that
-    /// the caller has `Get` access to every referenced object before applying.
-    fn get_fk_refs(
-        &self,
-        api_version: &str,
-        kind: &str,
-        spec: &serde_json::Value,
-        namespace: &str,
-    ) -> impl Future<Output = Result<Vec<String>, DawnStoreError>> + Send;
-
-    // ── Default methods ───────────────────────────────────────────────────────
-
-    /// Type-safe apply: serializes `Object<T>` and delegates to `apply_raw`.
-    fn apply<T: serde::Serialize + Send>(
-        &self,
-        obj: Object<T>,
-    ) -> impl Future<Output = Result<Vec<ReturnObject<serde_json::Value>>, DawnStoreError>> + Send {
-        async move { self.apply_raw(serde_json::to_value(obj)?).await }
-    }
-
-    /// Resolve `kind_or_alias` through the resource cache.
-    /// Falls back to the input unchanged when the alias is not registered.
-    fn resolve_kind(&self, kind_or_alias: &str) -> String {
-        self.resource_cache().resolve(kind_or_alias).unwrap_or_else(|| kind_or_alias.to_string())
-    }
-
-    /// Get objects, resolving the `kind` field through aliases first.
-    fn get(
-        &self,
-        filter: &GetObjectsFilter,
-    ) -> impl Future<Output = Result<Vec<ReturnObject<serde_json::Value>>, DawnStoreError>> + Send {
-        async move {
-            let kind = filter.kind.as_deref().map(|k| self.resolve_kind(k));
-            self.get_impl(&GetObjectsFilter { kind, ..filter.clone() }).await
-        }
-    }
-
-    /// Delete an object, resolving the `kind` field through aliases first.
-    fn delete(
-        &self,
-        delete: &DeleteObject,
-    ) -> impl Future<Output = Result<(), DawnStoreError>> + Send {
-        async move {
-            let kind = self.resolve_kind(&delete.kind);
-            self.delete_impl(&DeleteObject { kind, ..delete.clone() }).await
-        }
-    }
-
-    /// Get object infos, resolving the `kind` field through aliases first.
-    fn get_object_infos(
-        &self,
-        filter: &GetObjectInfosFilter,
-    ) -> impl Future<Output = Result<ObjectInfos, DawnStoreError>> + Send {
-        async move {
-            let kind = filter.kind.as_deref().map(|k| self.resolve_kind(k));
-            self.get_object_infos_impl(&GetObjectInfosFilter { kind, ..filter.clone() }).await
-        }
-    }
 }

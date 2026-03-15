@@ -3,14 +3,95 @@ use std::sync::{Arc, RwLock};
 
 use tokio::sync::RwLock as TokioRwLock;
 
-use crate::abstractions::{BackendGetObjectsFilter, NewDawnStoreBackend, RawForeignKeyConstraint};
+use crate::abstractions::{BackendGetObjectsFilter, DawnstoreBackend, RawForeignKeyConstraint};
 use crate::error::DawnStoreError;
-use crate::rbac::cache::{EffectivePermissions, GrantedScope, Verb};
 use crate::rbac::constants::{
     KIND_GLOBAL_ROLE, KIND_GLOBAL_ROLE_BINDING, KIND_ROLE, KIND_ROLE_BINDING, KIND_SERVICE_ACCOUNT,
+    SA_SUPERADMIN, SYSTEM_NAMESPACE,
 };
 use crate::rbac::helpers::{object_string_id, schema_cache_key};
+use crate::rbac::middleware::Claims;
 use crate::rbac::models::{GlobalRole, GlobalRoleBinding, Role, RoleBinding};
+
+// ── Verb ──────────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Verb {
+    Get,
+    Apply,
+    Delete,
+}
+
+impl Verb {
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "get" => Some(Verb::Get),
+            "apply" => Some(Verb::Apply),
+            "delete" => Some(Verb::Delete),
+            _ => None,
+        }
+    }
+}
+
+// ── GrantedScope ──────────────────────────────────────────────────────────────
+
+/// One collapsed permission grant derived from a `PolicyRule`.
+#[derive(Debug, Clone)]
+pub struct GrantedScope {
+    /// `"*"` matches all api versions.
+    pub api_version: String,
+    /// `["*"]` matches all kinds.
+    pub kinds: Vec<String>,
+    pub verbs: HashSet<Verb>,
+    /// `None` = all object names are permitted.
+    pub names: Option<Vec<String>>,
+}
+
+impl GrantedScope {
+    /// `true` if this scope grants `verb` on `(api_version, kind, name)`.
+    pub fn matches(&self, verb: Verb, api_version: &str, kind: &str, name: &str) -> bool {
+        self.verbs.contains(&verb)
+            && (self.api_version == "*" || self.api_version == api_version)
+            && self.kinds.iter().any(|k| k == "*" || k == kind)
+            && self.names.as_ref().map_or(true, |ns| ns.iter().any(|n| n == name))
+    }
+
+    /// `true` if this scope grants `verb` on `(api_version, kind)` for any name.
+    pub fn matches_kind(&self, verb: Verb, api_version: &str, kind: &str) -> bool {
+        self.verbs.contains(&verb)
+            && (self.api_version == "*" || self.api_version == api_version)
+            && self.kinds.iter().any(|k| k == "*" || k == kind)
+    }
+}
+
+// ── EffectivePermissions ──────────────────────────────────────────────────────
+
+/// The collapsed union of all role rules bound to a service account.
+#[derive(Debug, Clone, Default)]
+pub struct EffectivePermissions {
+    /// Grants from namespace-scoped `RoleBinding`s in the SA's own namespace.
+    pub namespaced: Vec<GrantedScope>,
+    /// Grants from `GlobalRoleBinding`s — apply regardless of namespace.
+    pub global: Vec<GrantedScope>,
+}
+
+impl EffectivePermissions {
+    /// Returns `true` if any grant allows `verb` on `(api_version, kind, name)`.
+    pub fn is_allowed(&self, verb: Verb, api_version: &str, kind: &str, name: &str) -> bool {
+        self.namespaced.iter().any(|s| s.matches(verb, api_version, kind, name))
+            || self.global.iter().any(|s| s.matches(verb, api_version, kind, name))
+    }
+}
+
+// ── is_superadmin ─────────────────────────────────────────────────────────────
+
+/// Returns `true` if the caller is the system superadmin.
+///
+/// The superadmin (`system/serviceaccount/superadmin`) bypasses all
+/// authorization checks and is the only identity that may issue tokens.
+pub fn is_superadmin(claims: &Claims) -> bool {
+    claims.namespace == SYSTEM_NAMESPACE && claims.sub == SA_SUPERADMIN
+}
 
 // ── Internal permission state ─────────────────────────────────────────────────
 
@@ -39,7 +120,7 @@ impl DawnstoreCache {
     // ── Init ──────────────────────────────────────────────────────────────────
 
     /// Initialise all three caches from `backend` in sequence.
-    pub async fn init<B: NewDawnStoreBackend>(backend: &B) -> Result<Self, DawnStoreError> {
+    pub async fn init<B: DawnstoreBackend>(backend: &B) -> Result<Self, DawnStoreError> {
         let cache = Self::default();
         cache.init_schema(backend).await?;
         cache.init_foreign_key(backend).await?;
@@ -50,7 +131,7 @@ impl DawnstoreCache {
     /// Populate the schema cache from all schemas returned by `backend`.
     /// Also populates the kind-alias map so that alias resolution is available
     /// immediately after schema initialisation.
-    pub async fn init_schema<B: NewDawnStoreBackend>(
+    pub async fn init_schema<B: DawnstoreBackend>(
         &self,
         backend: &B,
     ) -> Result<(), DawnStoreError> {
@@ -72,7 +153,7 @@ impl DawnstoreCache {
     }
 
     /// Populate the FK cache from all constraints returned by `backend`.
-    pub async fn init_foreign_key<B: NewDawnStoreBackend>(
+    pub async fn init_foreign_key<B: DawnstoreBackend>(
         &self,
         backend: &B,
     ) -> Result<(), DawnStoreError> {
@@ -90,7 +171,7 @@ impl DawnstoreCache {
     }
 
     /// Populate the permission cache from all RBAC objects returned by `backend`.
-    pub async fn init_permission<B: NewDawnStoreBackend>(
+    pub async fn init_permission<B: DawnstoreBackend>(
         &self,
         backend: &B,
     ) -> Result<(), DawnStoreError> {
@@ -234,7 +315,7 @@ fn scopes_from_global_role(role: &GlobalRole) -> Vec<GrantedScope> {
 }
 
 /// Build the full permission map by loading every RBAC object from `backend`.
-async fn build_full_permission_cache<B: NewDawnStoreBackend>(
+async fn build_full_permission_cache<B: DawnstoreBackend>(
     backend: &B,
 ) -> Result<
     (

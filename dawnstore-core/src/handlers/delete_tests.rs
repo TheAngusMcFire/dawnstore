@@ -9,7 +9,7 @@ mod tests {
         MockBackend, init_cache, make_claims, make_return_object, permissive_schema,
         schema_with_aliases, wildcard_grant,
     };
-    use crate::rbac::cache::{EffectivePermissions, GrantedScope, Verb};
+    use crate::cache::{EffectivePermissions, GrantedScope, Verb};
     use crate::rbac::constants::{API_VERSION_V1, KIND_ROLE_BINDING};
     use crate::rbac::helpers::object_string_id;
     use crate::rbac::middleware::Claims;

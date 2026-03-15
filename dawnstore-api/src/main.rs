@@ -5,7 +5,7 @@ use base64::prelude::*;
 use color_eyre::eyre;
 use dawnstore_core::abstractions::{ForeignKey, ForeignKeyType};
 use dawnstore_core::cache::DawnstoreCache;
-use dawnstore_core::controllers::get_dawnstore_new_routes;
+use dawnstore_core::controllers::get_dawnstore_routes;
 use dawnstore_postgres::PostgresBackend;
 use tokio::net::TcpListener;
 
@@ -62,7 +62,7 @@ async fn main() -> eyre::Result<()> {
 
     let cache = Arc::new(DawnstoreCache::init(&*backend).await?);
 
-    let dawnstore_routes = get_dawnstore_new_routes(Arc::clone(&backend), Arc::clone(&cache));
+    let dawnstore_routes = get_dawnstore_routes(Arc::clone(&backend), Arc::clone(&cache));
     let rbac_routes =
         dawnstore_core::rbac::get_rbac_routes(Arc::clone(&backend), private_key_pem);
 

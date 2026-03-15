@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT o.string_id\n        FROM relations r\n        JOIN objects o ON r.object_id = o.id\n        WHERE r.foreign_object_id = (\n            SELECT id FROM objects WHERE string_id = $1\n        )\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "string_id",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "d018d42e7190367565ff0d4a9dbdbed0e1e3a564cd7016bd27da014ced40916d"
+}

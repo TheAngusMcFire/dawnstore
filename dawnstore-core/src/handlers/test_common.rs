@@ -1,6 +1,6 @@
 /// Shared test infrastructure for handler unit tests.
 ///
-/// Provides a `MockBackend` that implements `NewDawnStoreBackend` and a set
+/// Provides a `MockBackend` that implements `DawnstoreBackend` and a set
 /// of helper constructors used across `apply_tests`, `get_tests`, and
 /// `delete_tests`.
 use std::collections::HashMap;
@@ -12,12 +12,12 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 use crate::abstractions::{
-    BackendGetObjectsFilter, ForeignKeyBehaviour, ForeignKeyType, NewDawnStoreBackend,
+    BackendGetObjectsFilter, ForeignKeyBehaviour, ForeignKeyType, DawnstoreBackend,
     ObjectRelation, RawForeignKeyConstraint, RawSchema,
 };
 use crate::cache::DawnstoreCache;
 use crate::error::DawnStoreError;
-use crate::rbac::cache::{GrantedScope, Verb};
+use crate::cache::{GrantedScope, Verb};
 use crate::rbac::helpers::object_string_id;
 use crate::rbac::middleware::Claims;
 
@@ -77,7 +77,7 @@ impl MockBackend {
     }
 }
 
-impl NewDawnStoreBackend for MockBackend {
+impl DawnstoreBackend for MockBackend {
     fn load_all_schemas(
         &self,
     ) -> impl Future<Output = Result<Vec<RawSchema>, DawnStoreError>> + Send {
@@ -174,6 +174,13 @@ impl NewDawnStoreBackend for MockBackend {
         let target = object_string_id(namespace, kind, name);
         let refs = self.inbound_refs.lock().unwrap().get(&target).cloned().unwrap_or_default();
         async move { Ok(refs) }
+    }
+
+    fn seed_schemas(
+        &self,
+        _schemas: &[crate::abstractions::SchemaDefinition],
+    ) -> impl Future<Output = Result<(), DawnStoreError>> + Send {
+        async move { Ok(()) }
     }
 }
 

@@ -1,10 +1,9 @@
 use dawnstore_lib::DeleteObject;
 
-use crate::abstractions::NewDawnStoreBackend;
+use crate::abstractions::DawnstoreBackend;
 use crate::cache::DawnstoreCache;
 use crate::error::DawnStoreError;
-use crate::rbac::authz_service::is_superadmin;
-use crate::rbac::cache::{EffectivePermissions, Verb};
+use crate::cache::{EffectivePermissions, Verb, is_superadmin};
 use crate::rbac::constants::{
     KIND_GLOBAL_ROLE, KIND_GLOBAL_ROLE_BINDING, KIND_ROLE, KIND_ROLE_BINDING,
 };
@@ -25,7 +24,7 @@ async fn resolve_kind(cache: &DawnstoreCache, kind: &str) -> Result<String, Dawn
 
 /// Load the effective permissions for `caller` from the cache, rebuilding from
 /// `backend` on a miss.
-async fn get_or_load_permissions<B: NewDawnStoreBackend>(
+async fn get_or_load_permissions<B: DawnstoreBackend>(
     cache: &DawnstoreCache,
     backend: &B,
     caller: &Claims,
@@ -42,7 +41,7 @@ async fn get_or_load_permissions<B: NewDawnStoreBackend>(
 /// When `caller` is `None` (unauthenticated / superadmin path) or the caller is
 /// the system superadmin SA, the check is skipped and `Ok(())` is returned.
 /// Returns [`DawnStoreError::Forbidden`] if the caller lacks the required permission.
-async fn check_delete_permission<B: NewDawnStoreBackend>(
+async fn check_delete_permission<B: DawnstoreBackend>(
     cache: &DawnstoreCache,
     backend: &B,
     caller: Option<&Claims>,
@@ -98,7 +97,7 @@ fn is_rbac_kind(kind: &str) -> bool {
 /// 5. If the deleted object is an RBAC resource (`Role`, `RoleBinding`, `GlobalRole`,
 ///    or `GlobalRoleBinding`), evict all permission-cache entries derived from it so
 ///    that downstream Get / Apply checks reflect the change immediately.
-pub async fn delete<B: NewDawnStoreBackend>(
+pub async fn delete<B: DawnstoreBackend>(
     backend: &B,
     cache: &DawnstoreCache,
     caller: Option<&Claims>,

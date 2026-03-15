@@ -11,7 +11,7 @@ mod tests {
         MockBackend, init_cache, kind_grant, make_claims, make_fk, permissive_schema,
         wildcard_grant, make_return_object,
     };
-    use crate::rbac::cache::{EffectivePermissions, Verb};
+    use crate::cache::{EffectivePermissions, Verb};
     use dawnstore_lib::ReturnObject;
 
     // ── Test-local helpers ────────────────────────────────────────────────────

@@ -1,12 +1,9 @@
-pub mod authz_service;
-pub mod cache;
 pub mod constants;
 pub mod helpers;
 pub mod jwt_service;
 pub mod middleware;
 pub mod models;
 
-pub use cache::RbacCache;
 pub use constants::*;
 pub use helpers::object_string_id;
 
@@ -16,7 +13,7 @@ use axum::{Router, middleware::from_fn_with_state};
 use chrono::{Duration, Utc};
 use middleware::{JwtAuthState, jwt_auth_middleware};
 use models::*;
-use crate::abstractions::{DawnstoreBackend, ForeignKey, ForeignKeyType, GetObjectsFilter, Object, SchemaDefinition};
+use crate::abstractions::{BackendGetObjectsFilter, DawnstoreBackend, ForeignKey, ForeignKeyType, ObjectAny, SchemaDefinition};
 use crate::error::DawnStoreError;
 
 // ── Schema definitions ────────────────────────────────────────────────────────
@@ -74,38 +71,38 @@ pub fn schemas() -> Vec<SchemaDefinition> {
 // ── Seeding ───────────────────────────────────────────────────────────────────
 
 async fn seed_system_namespace<B: DawnstoreBackend>(backend: &B) -> Result<(), DawnStoreError> {
-    backend
-        .apply(Object {
-            api_version: Some(API_VERSION_V1.to_string()),
-            kind: Some(KIND_NAMESPACE.to_string()),
-            namespace: Some(SYSTEM_NAMESPACE.to_string()),
-            name: SYSTEM_NAMESPACE.to_string(),
-            spec: Namespace {},
-            id: None,
-            created_at: None,
-            updated_at: None,
-            annotations: None,
-            labels: None,
-        })
-        .await?;
+    let obj = crate::abstractions::Object {
+        api_version: Some(API_VERSION_V1.to_string()),
+        kind: Some(KIND_NAMESPACE.to_string()),
+        namespace: Some(SYSTEM_NAMESPACE.to_string()),
+        name: SYSTEM_NAMESPACE.to_string(),
+        spec: Namespace {},
+        id: None,
+        created_at: None,
+        updated_at: None,
+        annotations: None,
+        labels: None,
+    };
+    let obj_any: ObjectAny = serde_json::from_value(serde_json::to_value(obj)?)?;
+    backend.upsert_objects(vec![obj_any], vec![]).await?;
     Ok(())
 }
 
 async fn seed_superadmin<B: DawnstoreBackend>(backend: &B) -> Result<(), DawnStoreError> {
-    backend
-        .apply(Object {
-            api_version: Some(API_VERSION_V1.to_string()),
-            kind: Some(KIND_SERVICE_ACCOUNT.to_string()),
-            namespace: Some(SYSTEM_NAMESPACE.to_string()),
-            name: SA_SUPERADMIN.to_string(),
-            spec: ServiceAccount {},
-            id: None,
-            created_at: None,
-            updated_at: None,
-            annotations: None,
-            labels: None,
-        })
-        .await?;
+    let obj = crate::abstractions::Object {
+        api_version: Some(API_VERSION_V1.to_string()),
+        kind: Some(KIND_SERVICE_ACCOUNT.to_string()),
+        namespace: Some(SYSTEM_NAMESPACE.to_string()),
+        name: SA_SUPERADMIN.to_string(),
+        spec: ServiceAccount {},
+        id: None,
+        created_at: None,
+        updated_at: None,
+        annotations: None,
+        labels: None,
+    };
+    let obj_any: ObjectAny = serde_json::from_value(serde_json::to_value(obj)?)?;
+    backend.upsert_objects(vec![obj_any], vec![]).await?;
     Ok(())
 }
 
@@ -113,7 +110,7 @@ async fn seed_superadmin<B: DawnstoreBackend>(backend: &B) -> Result<(), DawnSto
 ///
 /// Idempotent — safe to call on every startup.
 pub async fn init<B: DawnstoreBackend>(backend: &B) -> Result<(), DawnStoreError> {
-    backend.seed_schema(&schemas()).await?;
+    backend.seed_schemas(&schemas()).await?;
     seed_system_namespace(backend).await?;
     seed_superadmin(backend).await
 }
@@ -131,7 +128,7 @@ pub async fn bootstrap<B: DawnstoreBackend>(
     private_key_pem: &[u8],
 ) -> Result<Option<String>, DawnStoreError> {
     let existing = backend
-        .get(&GetObjectsFilter {
+        .get_objects(&BackendGetObjectsFilter {
             namespace: Some(SYSTEM_NAMESPACE.to_string()),
             kind: Some(KIND_SERVICE_ACCOUNT_TOKEN.to_string()),
             name: Some(TOKEN_BOOTSTRAP.to_string()),
@@ -145,23 +142,23 @@ pub async fn bootstrap<B: DawnstoreBackend>(
 
     let expires_at = Utc::now() + Duration::days(365);
 
-    let result = backend
-        .apply(Object {
-            api_version: Some(API_VERSION_V1.to_string()),
-            kind: Some(KIND_SERVICE_ACCOUNT_TOKEN.to_string()),
-            namespace: Some(SYSTEM_NAMESPACE.to_string()),
-            name: TOKEN_BOOTSTRAP.to_string(),
-            spec: ServiceAccountToken {
-                service_account: object_string_id(SYSTEM_NAMESPACE, KIND_SERVICE_ACCOUNT, SA_SUPERADMIN),
-                expires_at: Some(expires_at),
-            },
-            id: None,
-            created_at: None,
-            updated_at: None,
-            annotations: None,
-            labels: None,
-        })
-        .await?;
+    let obj = crate::abstractions::Object {
+        api_version: Some(API_VERSION_V1.to_string()),
+        kind: Some(KIND_SERVICE_ACCOUNT_TOKEN.to_string()),
+        namespace: Some(SYSTEM_NAMESPACE.to_string()),
+        name: TOKEN_BOOTSTRAP.to_string(),
+        spec: ServiceAccountToken {
+            service_account: object_string_id(SYSTEM_NAMESPACE, KIND_SERVICE_ACCOUNT, SA_SUPERADMIN),
+            expires_at: Some(expires_at),
+        },
+        id: None,
+        created_at: None,
+        updated_at: None,
+        annotations: None,
+        labels: None,
+    };
+    let obj_any: ObjectAny = serde_json::from_value(serde_json::to_value(obj)?)?;
+    let result = backend.upsert_objects(vec![obj_any], vec![]).await?;
 
     let token_id = result
         .first()

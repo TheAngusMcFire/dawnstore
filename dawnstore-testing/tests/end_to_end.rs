@@ -12,7 +12,7 @@ use axum::Router;
 use dawnstore_client_lib::Api;
 use dawnstore_core::abstractions::{ForeignKey, ForeignKeyType};
 use dawnstore_core::cache::DawnstoreCache;
-use dawnstore_core::controllers::get_dawnstore_new_routes;
+use dawnstore_core::controllers::get_dawnstore_routes;
 use dawnstore_testing::Container;
 use dawnstore_postgres::PostgresBackend;
 use dawnstore_lib::{DeleteObject, GetObjectsFilter};
@@ -43,7 +43,7 @@ async fn spawn_server(pool: PgPool) -> Api {
 
     let backend = Arc::new(backend);
     let cache = Arc::new(DawnstoreCache::init(&*backend).await.unwrap());
-    let app = Router::new().merge(get_dawnstore_new_routes(backend, cache));
+    let app = Router::new().merge(get_dawnstore_routes(backend, cache));
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base_url = format!("http://{}", listener.local_addr().unwrap());
 
@@ -599,7 +599,7 @@ async fn spawn_rbac_server(pool: PgPool) -> RbacTestServer {
 
     let backend = Arc::new(backend);
     let cache = Arc::new(DawnstoreCache::init(&*backend).await.unwrap());
-    let dawnstore_routes = get_dawnstore_new_routes(Arc::clone(&backend), Arc::clone(&cache));
+    let dawnstore_routes = get_dawnstore_routes(Arc::clone(&backend), Arc::clone(&cache));
     let rbac_routes = dawnstore_core::rbac::get_rbac_routes(
         Arc::clone(&backend),
         keypair.private_key_pem.clone(),
@@ -625,7 +625,7 @@ async fn spawn_rbac_server(pool: PgPool) -> RbacTestServer {
 
 #[test]
 fn authz_is_superadmin_accepts_only_system_superadmin() {
-    use dawnstore_core::rbac::authz_service::is_superadmin;
+    use dawnstore_core::cache::is_superadmin;
     use dawnstore_core::rbac::middleware::Claims;
 
     let yes = Claims {

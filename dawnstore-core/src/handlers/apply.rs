@@ -4,13 +4,12 @@ use std::sync::Arc;
 use dawnstore_lib::{ListOfObjects, ObjectAny, ReturnObject};
 
 use crate::abstractions::{
-    ForeignKeyBehaviour, ForeignKeyType, NewDawnStoreBackend, ObjectRelation,
+    ForeignKeyBehaviour, ForeignKeyType, DawnstoreBackend, ObjectRelation,
     RawForeignKeyConstraint,
 };
 use crate::cache::DawnstoreCache;
 use crate::error::DawnStoreError;
-use crate::rbac::authz_service::is_superadmin;
-use crate::rbac::cache::{EffectivePermissions, GrantedScope, Verb};
+use crate::cache::{EffectivePermissions, GrantedScope, Verb, is_superadmin};
 use crate::rbac::constants::{
     KIND_GLOBAL_ROLE, KIND_GLOBAL_ROLE_BINDING, KIND_ROLE, KIND_ROLE_BINDING,
 };
@@ -89,7 +88,7 @@ fn has_permission(perms: &EffectivePermissions, verb: Verb, kind: &str, name: &s
 /// full permission cache is rebuilt from the backend, and the check is
 /// re-evaluated. Returns [`DawnStoreError::Forbidden`] if the caller lacks
 /// the required permission.
-async fn check_permission<B: NewDawnStoreBackend>(
+async fn check_permission<B: DawnstoreBackend>(
     cache: &DawnstoreCache,
     backend: &B,
     caller: Option<&Claims>,
@@ -323,7 +322,7 @@ fn extract_fk_values(
 /// 3. For each constraint call [`extract_fk_values`] to get resolved string IDs.
 /// 4. For each target string ID:
 ///    a. Check `Get` permission for `caller` via [`check_permission`].
-///    b. Fetch the target from `backend` via [`NewDawnStoreBackend::get_object`].
+///    b. Fetch the target from `backend` via [`DawnstoreBackend::get_object`].
 ///    c. If the target is missing and the FK is required → return an error.
 ///    d. Record an [`ObjectRelation`] edge for the upsert step.
 ///    e. If not yet visited, push the fetched target onto the queue so its own
@@ -331,7 +330,7 @@ fn extract_fk_values(
 ///       of navigation properties such as `Container.parent_object`).
 ///
 /// Returns all [`ObjectRelation`] edges collected during the walk.
-async fn walk_foreign_key_graph<B: NewDawnStoreBackend>(
+async fn walk_foreign_key_graph<B: DawnstoreBackend>(
     backend: &B,
     cache: &DawnstoreCache,
     caller: Option<&Claims>,
@@ -466,7 +465,7 @@ async fn walk_foreign_key_graph<B: NewDawnStoreBackend>(
 /// path); all permission checks are skipped in that case.
 ///
 /// See the module-level doc comment for the full step-by-step description.
-pub async fn apply<B: NewDawnStoreBackend>(
+pub async fn apply<B: DawnstoreBackend>(
     backend: &B,
     cache: &DawnstoreCache,
     caller: Option<&Claims>,

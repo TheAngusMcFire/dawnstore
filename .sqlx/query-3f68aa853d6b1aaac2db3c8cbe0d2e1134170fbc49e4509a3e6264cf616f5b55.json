@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT object_id, foreign_object_id, foreign_key_id\n        FROM relations\n        WHERE object_id = ANY($1)\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "object_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "foreign_object_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "foreign_key_id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "UuidArray"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "3f68aa853d6b1aaac2db3c8cbe0d2e1134170fbc49e4509a3e6264cf616f5b55"
+}

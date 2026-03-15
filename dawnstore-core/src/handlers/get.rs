@@ -1,10 +1,9 @@
 use dawnstore_lib::{AllowedScope, GetObjectsFilter, ReturnObject};
 
-use crate::abstractions::{BackendGetObjectsFilter, NewDawnStoreBackend};
+use crate::abstractions::{BackendGetObjectsFilter, DawnstoreBackend};
 use crate::cache::DawnstoreCache;
 use crate::error::DawnStoreError;
-use crate::rbac::authz_service::is_superadmin;
-use crate::rbac::cache::{EffectivePermissions, GrantedScope, Verb};
+use crate::cache::{EffectivePermissions, GrantedScope, Verb, is_superadmin};
 use crate::rbac::middleware::Claims;
 
 // ── Private helpers ───────────────────────────────────────────────────────────
@@ -22,7 +21,7 @@ async fn resolve_kind(cache: &DawnstoreCache, kind: &str) -> Result<String, Dawn
 
 /// Load the effective permissions for `caller` from the cache, rebuilding from
 /// `backend` on a miss.
-async fn get_or_load_permissions<B: NewDawnStoreBackend>(
+async fn get_or_load_permissions<B: DawnstoreBackend>(
     cache: &DawnstoreCache,
     backend: &B,
     caller: &Claims,
@@ -44,7 +43,7 @@ async fn get_or_load_permissions<B: NewDawnStoreBackend>(
 /// Namespace-scoped grants from the caller's `RoleBinding`s apply only within
 /// the SA's own namespace (`caller.namespace`). Global grants (from `GlobalRoleBinding`s)
 /// apply across all namespaces (`AllowedScope.namespace = None`).
-async fn build_allowed<B: NewDawnStoreBackend>(
+async fn build_allowed<B: DawnstoreBackend>(
     cache: &DawnstoreCache,
     backend: &B,
     caller: Option<&Claims>,
@@ -96,7 +95,7 @@ fn add_get_scopes(grant: &GrantedScope, namespace: Option<String>, out: &mut Vec
 ///    - `Some([...])`: restrict to objects the caller may read; injected into the
 ///      backend filter so the backend can apply the restriction at query time.
 /// 3. Delegate to `backend.get_objects()` with the resolved filter + RBAC constraint.
-pub async fn get<B: NewDawnStoreBackend>(
+pub async fn get<B: DawnstoreBackend>(
     backend: &B,
     cache: &DawnstoreCache,
     caller: Option<&Claims>,
