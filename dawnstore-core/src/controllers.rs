@@ -119,20 +119,29 @@ fn auth_err(status: StatusCode, message: impl Into<String>) -> Response {
     resp
 }
 
-// ── New controller (DawnstoreBackend + DawnstoreCache) ─────────────────────
+// ── Controller state ───────────────────────────────────────────────────────
 
 struct ApiState<B> {
     backend: Arc<B>,
     cache: Arc<DawnstoreCache>,
+    private_key_pem: Vec<u8>,
 }
 
 impl<B> Clone for ApiState<B> {
     fn clone(&self) -> Self {
-        Self { backend: Arc::clone(&self.backend), cache: Arc::clone(&self.cache) }
+        Self {
+            backend: Arc::clone(&self.backend),
+            cache: Arc::clone(&self.cache),
+            private_key_pem: self.private_key_pem.clone(),
+        }
     }
 }
 
-pub fn get_dawnstore_routes<B>(backend: Arc<B>, cache: Arc<DawnstoreCache>) -> Router
+pub fn get_dawnstore_routes<B>(
+    backend: Arc<B>,
+    cache: Arc<DawnstoreCache>,
+    private_key_pem: Vec<u8>,
+) -> Router
 where
     B: DawnstoreBackend + 'static,
 {
@@ -141,7 +150,8 @@ where
         .route("/get-objects", post(get_objects_handler::<B>))
         .route("/get-resource-definitions", post(get_resource_definitions_handler::<B>))
         .route("/delete-object", delete(delete_object_handler::<B>))
-        .with_state(ApiState { backend, cache })
+        .route("/rbac/issue-token", post(issue_token::<B>))
+        .with_state(ApiState { backend, cache, private_key_pem })
 }
 
 /// Check that no `Namespace` objects are being applied outside the system namespace.
@@ -251,36 +261,10 @@ pub fn unauthorized(message: impl Into<String>) -> Response {
     auth_err(StatusCode::UNAUTHORIZED, message)
 }
 
-// ── Token controller ──────────────────────────────────────────────────────────
-
-struct TokenState<B> {
-    backend: Arc<B>,
-    private_key_pem: Vec<u8>,
-    cache: Arc<DawnstoreCache>,
-}
-
-impl<B> Clone for TokenState<B> {
-    fn clone(&self) -> Self {
-        Self {
-            backend: Arc::clone(&self.backend),
-            private_key_pem: self.private_key_pem.clone(),
-            cache: Arc::clone(&self.cache),
-        }
-    }
-}
-
-pub fn get_rbac_token_routes<B: DawnstoreBackend + 'static>(
-    backend: Arc<B>,
-    private_key_pem: Vec<u8>,
-    cache: Arc<DawnstoreCache>,
-) -> Router {
-    Router::new()
-        .route("/rbac/issue-token", post(issue_token::<B>))
-        .with_state(TokenState { backend, private_key_pem, cache })
-}
+// ── Token issuance ────────────────────────────────────────────────────────────
 
 async fn issue_token<B: DawnstoreBackend + 'static>(
-    State(state): State<TokenState<B>>,
+    State(state): State<ApiState<B>>,
     Extension(claims): Extension<crate::rbac::middleware::Claims>,
     Json(req): Json<IssueTokenRequest>,
 ) -> Response {

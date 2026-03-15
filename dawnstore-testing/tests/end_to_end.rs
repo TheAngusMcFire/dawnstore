@@ -8,7 +8,6 @@
 
 use std::sync::Arc;
 
-use axum::Router;
 use dawnstore_client_lib::Api;
 use dawnstore_core::abstractions::{ForeignKey, ForeignKeyType};
 use dawnstore_core::cache::DawnstoreCache;
@@ -43,7 +42,7 @@ async fn spawn_server(pool: PgPool) -> Api {
 
     let backend = Arc::new(backend);
     let cache = Arc::new(DawnstoreCache::init(&*backend).await.unwrap());
-    let app = Router::new().merge(get_dawnstore_routes(backend, cache));
+    let app = get_dawnstore_routes(backend, cache, vec![]);
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base_url = format!("http://{}", listener.local_addr().unwrap());
 
@@ -598,14 +597,13 @@ async fn spawn_rbac_server(pool: PgPool) -> RbacTestServer {
 
     let backend = Arc::new(backend);
     let cache = Arc::new(DawnstoreCache::init(&*backend).await.unwrap());
-    let dawnstore_routes = get_dawnstore_routes(Arc::clone(&backend), Arc::clone(&cache));
-    let rbac_routes = dawnstore_core::rbac::get_rbac_routes(
+    let routes = get_dawnstore_routes(
         Arc::clone(&backend),
-        keypair.private_key_pem.clone(),
         Arc::clone(&cache),
+        keypair.private_key_pem.clone(),
     );
     let app = dawnstore_core::rbac::with_jwt_auth(
-        Router::new().merge(dawnstore_routes).merge(rbac_routes),
+        routes,
         keypair.public_key_pem.clone(),
         Arc::clone(&cache),
     );

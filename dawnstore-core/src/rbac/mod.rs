@@ -181,18 +181,6 @@ pub async fn bootstrap<B: DawnstoreBackend>(
 
 // ── Axum router helpers ───────────────────────────────────────────────────────
 
-/// Returns the RBAC management routes (e.g. `POST /rbac/issue-token`).
-///
-/// These routes must be merged into the application router **before** calling
-/// [`with_jwt_auth`], so that the JWT middleware protects them.
-pub fn get_rbac_routes<B: DawnstoreBackend + 'static>(
-    backend: Arc<B>,
-    private_key_pem: Vec<u8>,
-    cache: Arc<crate::cache::DawnstoreCache>,
-) -> Router {
-    crate::controllers::get_rbac_token_routes(backend, private_key_pem, cache)
-}
-
 /// Wrap `router` with JWT authentication middleware.
 ///
 /// `public_key_pem` is the PEM-encoded EC public key used to verify tokens.
