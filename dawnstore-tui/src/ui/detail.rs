@@ -7,12 +7,8 @@ use ratatui::{
     text::{Line, Span, Text},
     widgets::{Block, Borders, Padding, Paragraph, Wrap},
 };
-use syntect::{
-    easy::HighlightLines,
-    highlighting::{Theme, ThemeSet},
-    parsing::SyntaxSet,
-    util::LinesWithEndings,
-};
+use syntect::{easy::HighlightLines, highlighting::Theme, parsing::SyntaxSet, util::LinesWithEndings};
+use syntect_assets::assets::HighlightingAssets;
 
 use crate::app::App;
 
@@ -25,12 +21,9 @@ static HIGHLIGHTER: OnceLock<Highlighter> = OnceLock::new();
 
 fn highlighter() -> &'static Highlighter {
     HIGHLIGHTER.get_or_init(|| {
-        let ss = SyntaxSet::load_defaults_newlines();
-        let mut ts = ThemeSet::load_defaults();
-        // "base16-ocean.dark" ships with syntect's default themes and looks
-        // good on a dark terminal background.
-        let theme = ts.themes.remove("base16-ocean.dark")
-            .unwrap_or_else(|| ts.themes.into_values().next().expect("no themes"));
+        let assets = HighlightingAssets::from_binary();
+        let ss = assets.get_syntax_set().expect("syntax set").clone();
+        let theme = assets.get_theme("Monokai Extended").clone();
         Highlighter { ss, theme }
     })
 }
