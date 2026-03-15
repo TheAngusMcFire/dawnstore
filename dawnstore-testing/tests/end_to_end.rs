@@ -551,6 +551,103 @@ async fn foreign_key_updated_on_reapply(pool: PgPool) -> sqlx::Result<()> {
     Ok(())
 }
 
+// ── Nav-prop security (Issue 9) ───────────────────────────────────────────────
+
+/// Embedded nav-prop round-trip: a container sent with a `parent_object` payload
+/// (as returned by fill_child_foreign_keys) must be correctly extracted and both
+/// objects stored — the original behaviour must be preserved.
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn nav_prop_round_trip_still_works(pool: PgPool) -> sqlx::Result<()> {
+    let api = spawn_server(pool).await;
+
+    // Apply parent first so it exists.
+    api.apply_str(container("parent-box", 10)).await.unwrap();
+
+    // Apply child with a fully-embedded parent_object (round-trip scenario).
+    let result = api
+        .apply_str(serde_json::to_string(&serde_json::json!({
+            "api_version": "v1",
+            "kind": "container",
+            "name": "child-box",
+            "nr": 20,
+            "parent": "parent-box",
+            "parent_object": {
+                "api_version": "v1",
+                "kind": "container",
+                "name": "parent-box",
+                "spec": { "nr": 10 }
+            }
+        })).unwrap())
+        .await;
+    assert!(result.is_ok(), "nav-prop round-trip apply should succeed: {result:?}");
+
+    Ok(())
+}
+
+/// A registered nav-prop field with a value that is NOT a valid ObjectAny must
+/// return an error instead of silently discarding the data.
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn nav_prop_invalid_value_returns_error(pool: PgPool) -> sqlx::Result<()> {
+    let api = spawn_server(pool).await;
+
+    // `parent_object` is a registered nav-prop (from the `parent` FK constraint).
+    // Sending a plain string instead of an ObjectAny must be rejected.
+    let result = api
+        .apply_str(serde_json::to_string(&serde_json::json!({
+            "api_version": "v1",
+            "kind": "container",
+            "name": "test-box",
+            "nr": 1,
+            "parent_object": "this is not an object"
+        })).unwrap())
+        .await;
+    assert!(result.is_err(), "invalid nav-prop value must return an error, not silently drop data");
+
+    Ok(())
+}
+
+/// A spec field that ends with `_object` but is NOT a registered nav-prop for
+/// this kind must stay in the spec (where it fails schema validation for kinds
+/// with deny_unknown_fields), not be silently extracted and applied.
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn unregistered_object_field_is_not_extracted(pool: PgPool) -> sqlx::Result<()> {
+    let api = spawn_server(pool).await;
+
+    // `grandparent_object` is not declared as a FK constraint for Container.
+    // Before the fix this would be silently extracted and the embedded object
+    // applied as a side-effect, bypassing schema validation.
+    // After the fix the field stays in the spec, which fails schema validation
+    // (Container uses deny_unknown_fields).
+    let result = api
+        .apply_str(serde_json::to_string(&serde_json::json!({
+            "api_version": "v1",
+            "kind": "container",
+            "name": "test-box",
+            "nr": 1,
+            "grandparent_object": {
+                "api_version": "v1",
+                "kind": "container",
+                "name": "smuggled-object",
+                "spec": { "nr": 99 }
+            }
+        })).unwrap())
+        .await;
+    assert!(result.is_err(), "unregistered _object field must fail schema validation, not be silently extracted");
+
+    // Confirm the smuggled object was NOT persisted.
+    let objects = api
+        .get_objects(&GetObjectsFilter {
+            kind: Some("container".into()),
+            name: Some("smuggled-object".into()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert!(objects.is_empty(), "smuggled object must not have been persisted: {objects:?}");
+
+    Ok(())
+}
+
 // ── RBAC ─────────────────────────────────────────────────────────────────────
 //
 // Tests for rbac::init (seeding), rbac::bootstrap, and /rbac/issue-token.

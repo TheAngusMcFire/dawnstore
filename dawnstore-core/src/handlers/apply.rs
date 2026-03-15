@@ -199,6 +199,22 @@ fn resolve_fk_string(value: &str, object_ns: &str, default_kind: Option<&str>) -
     }
 }
 
+/// Compute the nav-prop field name for a FK constraint.
+///
+/// The GET endpoint injects child objects under `{key_path}_object` (for singular
+/// FK types) or `{key_path}_objects` (for array FK types). This mirrors that
+/// naming so apply knows which spec fields to treat as embedded objects.
+fn nav_prop_field_name(constraint: &RawForeignKeyConstraint) -> String {
+    match constraint.ty {
+        ForeignKeyType::OneOrMany | ForeignKeyType::NoneOrMany => {
+            format!("{}_objects", constraint.key_path)
+        }
+        ForeignKeyType::One | ForeignKeyType::OneOptional => {
+            format!("{}_object", constraint.key_path)
+        }
+    }
+}
+
 /// Extract and validate all FK string values from `spec` for a single constraint.
 ///
 /// Walks `constraint.key_path` (dot-separated) inside `spec` to locate the FK
@@ -333,22 +349,54 @@ fn extract_fk_values(
 
 /// Extract embedded navigation-property objects from a list of objects.
 ///
-/// Navigation properties are spec fields whose name ends with `_object` (a single
-/// embedded `ReturnObject`) or `_objects` (an array of them). Each embedded value
-/// is removed from the parent's spec and returned as a separate `ObjectAny` so it
-/// can be validated, permission-checked, and upserted alongside the parent.
+/// Navigation properties are spec fields whose name matches a registered FK
+/// constraint's nav-prop name: `{key_path}_object` (singular FK types) or
+/// `{key_path}_objects` (array FK types). Only fields that are declared in the FK
+/// constraint cache for that object's `(api_version, kind)` are extracted —
+/// unrecognised `_object`/`_objects` fields are left in the spec where they will
+/// be caught by JSON schema validation.
 ///
-/// Returning the extracted objects separately lets the caller prepend them to the
-/// batch so they are available as FK targets when the parent object is processed.
-fn extract_navigation_properties(objects: Vec<ObjectAny>) -> (Vec<ObjectAny>, Vec<ObjectAny>) {
+/// Each extracted value is removed from the parent's spec and returned as a
+/// separate `ObjectAny` so it can be validated, permission-checked, and upserted
+/// alongside the parent. This lets callers round-trip a GET response (which may
+/// contain embedded nav-props) directly back to apply without stripping fields
+/// first.
+///
+/// Returns [`DawnStoreError::DeserialisationError`] if a registered nav-prop field
+/// cannot be parsed as `ObjectAny` (or `Vec<ObjectAny>` for array types).
+async fn extract_navigation_properties(
+    cache: &DawnstoreCache,
+    objects: Vec<ObjectAny>,
+) -> Result<(Vec<ObjectAny>, Vec<ObjectAny>), DawnStoreError> {
     let mut cleaned = Vec::with_capacity(objects.len());
     let mut extracted = Vec::new();
 
     for mut obj in objects {
+        // Build the set of registered nav-prop field names for this object's kind.
+        // Only top-level, non-dotted key paths can map to top-level spec fields.
+        let nav_prop_fields: HashSet<String> = match (obj.kind.as_deref(), obj.api_version.as_deref()) {
+            (Some(raw_kind), Some(api_version)) => {
+                let canonical = cache.resolve_kind(raw_kind).await.unwrap_or_else(|| raw_kind.to_string());
+                cache
+                    .get_foreign_keys(api_version, &canonical)
+                    .await
+                    .map(|constraints| {
+                        constraints
+                            .iter()
+                            .filter(|c| !c.key_path.contains('.'))
+                            .map(nav_prop_field_name)
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            }
+            _ => HashSet::new(),
+        };
+
         if let serde_json::Value::Object(ref mut map) = obj.spec {
+            // Only extract fields that are registered nav-props for this kind.
             let nav_keys: Vec<String> = map
                 .keys()
-                .filter(|k| k.ends_with("_object") || k.ends_with("_objects"))
+                .filter(|k| nav_prop_fields.contains(*k))
                 .cloned()
                 .collect();
 
@@ -358,24 +406,26 @@ fn extract_navigation_properties(objects: Vec<ObjectAny>) -> (Vec<ObjectAny>, Ve
                     None => continue,
                 };
                 if key.ends_with("_objects") {
-                    if let Some(arr) = val.as_array() {
-                        for item in arr {
-                            if let Ok(embedded) = serde_json::from_value::<ObjectAny>(item.clone()) {
-                                extracted.push(embedded);
-                            }
-                        }
+                    let items: Vec<serde_json::Value> =
+                        serde_json::from_value(val).map_err(DawnStoreError::DeserialisationError)?;
+                    for item in items {
+                        extracted.push(
+                            serde_json::from_value::<ObjectAny>(item)
+                                .map_err(DawnStoreError::DeserialisationError)?,
+                        );
                     }
                 } else if !val.is_null() {
-                    if let Ok(embedded) = serde_json::from_value::<ObjectAny>(val) {
-                        extracted.push(embedded);
-                    }
+                    extracted.push(
+                        serde_json::from_value::<ObjectAny>(val)
+                            .map_err(DawnStoreError::DeserialisationError)?,
+                    );
                 }
             }
         }
         cleaned.push(obj);
     }
 
-    (cleaned, extracted)
+    Ok((cleaned, extracted))
 }
 
 /// Walk the full FK graph reachable from `seed_objects` using an iterative work queue.
@@ -751,11 +801,12 @@ pub async fn apply<B: DawnstoreBackend>(
     let raw_objects = parse_input(input)?;
 
     // Step 2: extract embedded navigation-property objects from the input.
-    // Nav-prop fields (ending in `_object` / `_objects`) are removed from each
-    // parent's spec and prepended to the batch so they are FK-available when
-    // their parent is processed. They are validated and upserted alongside the
-    // parent objects, so the caller only needs to send one request.
-    let (parent_objects, nav_objects) = extract_navigation_properties(raw_objects);
+    // Only fields that are declared as FK constraints for each object's kind are
+    // extracted; unrecognised `_object`/`_objects` fields remain in the spec and
+    // are validated normally. Extracted objects are prepended to the batch so they
+    // are FK-available when their parent is processed.
+    let (parent_objects, nav_objects) =
+        extract_navigation_properties(cache, raw_objects).await?;
     let objects: Vec<ObjectAny> = nav_objects.into_iter().chain(parent_objects).collect();
 
     // Step 3: reject any object whose name or namespace contains '/'.

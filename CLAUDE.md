@@ -130,5 +130,5 @@ Nav-props are spec fields whose name ends in `_object` (singular FK) or `_object
 | 6 | ~~Deleting a `ServiceAccount` does not invalidate its cached permissions~~ **FIXED** | `handlers/delete.rs`, `cache.rs` |
 | 7 | ~~Concurrent cache miss → N parallel full DB scans with no deduplication~~ **FIXED** | `cache.rs` |
 | 8 | ~~Object names with `/` create ambiguous string IDs~~ **FIXED** | `handlers/apply.rs`, `controllers.rs`, `error.rs` |
-| 9 | Any `_object`/`_objects` spec field is silently extracted; failed deserialization is swallowed | `handlers/apply.rs` |
+| 9 | ~~Any `_object`/`_objects` spec field is silently extracted; failed deserialization is swallowed~~ **FIXED** | `handlers/apply.rs` |
 | 10 | No request body size limit | All handlers |
