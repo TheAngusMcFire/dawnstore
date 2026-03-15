@@ -130,10 +130,6 @@ pub struct GetObjectsFilter {
     pub ids: Option<Vec<Uuid>>,
     pub page: Option<usize>,
     pub page_size: Option<usize>,
-    /// RBAC constraint injected by the controller. `None` = unrestricted
-    /// (superadmin). `Some([])` = deny all (no matching scopes).
-    #[serde(skip)]
-    pub allowed: Option<Vec<AllowedScope>>,
 }
 
 #[derive(serde::Deserialize, serde::Serialize, Debug)]
@@ -185,9 +181,6 @@ pub struct GetObjectInfosFilter {
     pub name_search_string: Option<String>,
     pub page: Option<usize>,
     pub page_size: Option<usize>,
-    /// RBAC constraint — same semantics as [`GetObjectsFilter::allowed`].
-    #[serde(skip)]
-    pub allowed: Option<Vec<AllowedScope>>,
 }
 
 // ── Request / response ────────────────────────────────────────────────────────

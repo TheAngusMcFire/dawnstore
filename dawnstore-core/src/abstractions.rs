@@ -131,6 +131,9 @@ pub struct BackendGetObjectsFilter {
     pub namespace: Option<String>,
     pub kind: Option<String>,
     pub name: Option<String>,
+    pub ids: Option<Vec<Uuid>>,
+    pub page: Option<usize>,
+    pub page_size: Option<usize>,
     /// RBAC constraint injected by the get handler.
     /// `None` = unrestricted (superadmin / unauthenticated path).
     /// `Some([])` = deny all (caller has no matching Get grants).

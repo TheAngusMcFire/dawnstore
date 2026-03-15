@@ -20,3 +20,7 @@ refactoring base functionality:
       * check permission of the objects extracted with the foreign keys
       * check schema of the nav props
       * check foreign keys 
+
+
+checkout @dawnstore-api/src/models.rs there is a Container model, it contains the field parent_object this is a navigation property, a
+  placeholder which is not written into the database, it gets filled in the get endpoint if the and

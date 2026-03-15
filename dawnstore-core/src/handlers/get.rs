@@ -116,6 +116,9 @@ pub async fn get<B: DawnstoreBackend>(
             namespace: filter.namespace,
             kind,
             name: filter.name,
+            ids: filter.ids,
+            page: filter.page,
+            page_size: filter.page_size,
             allowed,
             fill_child_foreign_keys: filter.fill_child_foreign_keys,
         })

@@ -79,13 +79,7 @@ async fn main() -> color_eyre::Result<()> {
                 } else {
                     Some(resource.clone())
                 },
-                name: None,
-                ids: None,
-                page: None,
-                page_size: None,
-                fill_child_foreign_keys: false,
-                fill_parent_foreign_keys: false,
-                allowed: None,
+                ..Default::default()
             };
             let rd = api.get_objects(&filter).await.map_err(api_err)?;
             println!(
@@ -120,12 +114,9 @@ async fn main() -> color_eyre::Result<()> {
                 namespace: Some(args.namespace.as_deref().unwrap_or("default").to_string()),
                 kind: Some(resource.clone()),
                 name: Some(item_name.clone()),
-                ids: None,
-                page: None,
-                page_size: None,
                 fill_child_foreign_keys: true,
                 fill_parent_foreign_keys: true,
-                allowed: None,
+                ..Default::default()
             };
             let mut rd = api.get_objects(&filter).await.map_err(api_err)?;
             let Some(obj) = rd.pop() else {

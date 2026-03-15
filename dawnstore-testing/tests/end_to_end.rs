@@ -558,7 +558,6 @@ async fn foreign_key_updated_on_reapply(pool: PgPool) -> sqlx::Result<()> {
 // Seeding / bootstrap tests run directly against the backend; HTTP-layer tests
 // use a full server with JWT middleware.
 
-use dawnstore_core::abstractions::DawnstoreBackend;
 use dawnstore_core::rbac::jwt_service;
 
 #[allow(dead_code)]
@@ -656,19 +655,14 @@ async fn rbac_init_seeds_system_namespace(pool: PgPool) -> sqlx::Result<()> {
     let backend = PostgresBackend::new(pool);
     dawnstore_core::rbac::init(&backend).await.unwrap();
 
-    let objects = DawnstoreBackend::get(&backend, &GetObjectsFilter {
-            namespace: Some("system".into()),
-            kind: Some("namespace".into()),
-            name: Some("system".into()),
-            ..Default::default()
-        })
-        .await
-        .unwrap();
+    use dawnstore_core::abstractions::DawnstoreBackend as _;
+    let obj = backend.get_object("system", "namespace", "system").await.unwrap();
 
-    assert_eq!(objects.len(), 1);
-    assert_eq!(objects[0].name, "system");
-    assert_eq!(objects[0].namespace, "system");
-    assert_eq!(objects[0].kind, "namespace");
+    assert!(obj.is_some());
+    let obj = obj.unwrap();
+    assert_eq!(obj.name, "system");
+    assert_eq!(obj.namespace, "system");
+    assert_eq!(obj.kind, "namespace");
 
     Ok(())
 }
@@ -678,18 +672,13 @@ async fn rbac_init_seeds_superadmin(pool: PgPool) -> sqlx::Result<()> {
     let backend = PostgresBackend::new(pool);
     dawnstore_core::rbac::init(&backend).await.unwrap();
 
-    let objects = DawnstoreBackend::get(&backend, &GetObjectsFilter {
-            namespace: Some("system".into()),
-            kind: Some("serviceaccount".into()),
-            name: Some("superadmin".into()),
-            ..Default::default()
-        })
-        .await
-        .unwrap();
+    use dawnstore_core::abstractions::DawnstoreBackend as _;
+    let obj = backend.get_object("system", "serviceaccount", "superadmin").await.unwrap();
 
-    assert_eq!(objects.len(), 1);
-    assert_eq!(objects[0].name, "superadmin");
-    assert_eq!(objects[0].namespace, "system");
+    assert!(obj.is_some());
+    let obj = obj.unwrap();
+    assert_eq!(obj.name, "superadmin");
+    assert_eq!(obj.namespace, "system");
 
     Ok(())
 }

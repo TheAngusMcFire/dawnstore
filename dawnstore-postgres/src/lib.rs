@@ -104,15 +104,8 @@ impl DawnstoreBackend for PostgresBackend {
         filter: &BackendGetObjectsFilter,
     ) -> impl std::future::Future<Output = Result<Vec<ReturnObject<serde_json::Value>>, DawnStoreError>> + Send
     {
-        let get_filter = GetObjectsFilter {
-            namespace: filter.namespace.clone(),
-            kind: filter.kind.clone(),
-            name: filter.name.clone(),
-            allowed: filter.allowed.clone(),
-            fill_child_foreign_keys: filter.fill_child_foreign_keys,
-            ..Default::default()
-        };
-        async move { self.get_objects_impl(&get_filter).await }
+        let filter = filter.clone();
+        async move { self.get_objects_impl(&filter).await }
     }
 
     fn get_object(
@@ -122,14 +115,14 @@ impl DawnstoreBackend for PostgresBackend {
         name: &str,
     ) -> impl std::future::Future<Output = Result<Option<ReturnObject<serde_json::Value>>, DawnStoreError>> + Send
     {
-        let get_filter = GetObjectsFilter {
+        let filter = BackendGetObjectsFilter {
             namespace: Some(namespace.to_string()),
             kind: Some(kind.to_string()),
             name: Some(name.to_string()),
             ..Default::default()
         };
         async move {
-            let results = self.get_objects_impl(&get_filter).await?;
+            let results = self.get_objects_impl(&filter).await?;
             Ok(results.into_iter().next())
         }
     }
@@ -385,7 +378,7 @@ impl DawnstoreBackend for PostgresBackend {
 impl PostgresBackend {
     async fn get_objects_impl(
         &self,
-        filter: &GetObjectsFilter,
+        filter: &BackendGetObjectsFilter,
     ) -> Result<Vec<ReturnObject<serde_json::Value>>, DawnStoreError> {
         let mut con = self.pool.acquire().await?;
         let objs = queries::get_objects_by_filter(con.as_mut(), filter).await?;
