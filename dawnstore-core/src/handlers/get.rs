@@ -29,7 +29,8 @@ async fn get_or_load_permissions<B: DawnstoreBackend>(
     if let Some(perms) = cache.get_permissions(&caller.namespace, &caller.sub) {
         return Ok(perms);
     }
-    cache.init_permission(backend).await?;
+    let miss_gen = cache.permission_generation();
+    cache.init_permission(backend, miss_gen).await?;
     Ok(cache.get_permissions(&caller.namespace, &caller.sub).unwrap_or_default())
 }
 

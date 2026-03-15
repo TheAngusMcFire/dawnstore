@@ -3,7 +3,7 @@ use std::sync::{Arc, RwLock};
 
 use uuid::Uuid;
 
-use tokio::sync::RwLock as TokioRwLock;
+use tokio::sync::{Mutex as TokioMutex, RwLock as TokioRwLock};
 
 use crate::abstractions::{BackendGetObjectsFilter, DawnstoreBackend, RawForeignKeyConstraint};
 use crate::error::DawnStoreError;
@@ -103,22 +103,42 @@ struct PermissionState {
     permissions: HashMap<(String, String), EffectivePermissions>,
     /// Maps an RBAC object string ID to the SA keys whose permissions it contributed to.
     resource_index: HashMap<String, HashSet<(String, String)>>,
+    /// Monotonically increasing counter incremented on every full cache rebuild.
+    /// Used by `init_permission` to skip redundant rebuilds: if the generation
+    /// advanced while a caller was waiting for the rebuild lock, the cache was
+    /// already refreshed and no further work is needed.
+    generation: u64,
 }
 
 // ── DawnstoreCache ────────────────────────────────────────────────────────────
 
 /// Unified cache for schema validators, foreign key constraints, RBAC permissions,
 /// and kind-alias resolution.
-#[derive(Default)]
 pub struct DawnstoreCache {
     schema: TokioRwLock<HashMap<String, Arc<jsonschema::Validator>>>,
     foreign_key: TokioRwLock<HashMap<String, Arc<Vec<RawForeignKeyConstraint>>>>,
     permission: RwLock<PermissionState>,
+    /// Serialises concurrent permission cache rebuilds so that N simultaneous
+    /// cache misses result in at most one full DB scan instead of N.
+    permission_rebuild_lock: TokioMutex<()>,
     /// Maps every registered alias (and canonical kind name) → canonical kind name.
     kind_alias: TokioRwLock<HashMap<String, String>>,
     /// UUIDs of all currently valid `ServiceAccountToken` objects.
     /// A JWT whose `token_id` is absent from this set is treated as revoked.
     valid_token_ids: RwLock<HashSet<Uuid>>,
+}
+
+impl Default for DawnstoreCache {
+    fn default() -> Self {
+        Self {
+            schema: Default::default(),
+            foreign_key: Default::default(),
+            permission: Default::default(),
+            permission_rebuild_lock: TokioMutex::new(()),
+            kind_alias: Default::default(),
+            valid_token_ids: Default::default(),
+        }
+    }
 }
 
 impl DawnstoreCache {
@@ -129,7 +149,7 @@ impl DawnstoreCache {
         let cache = Self::default();
         cache.init_schema(backend).await?;
         cache.init_foreign_key(backend).await?;
-        cache.init_permission(backend).await?;
+        cache.init_permission(backend, 0).await?;
         cache.init_tokens(backend).await?;
         Ok(cache)
     }
@@ -192,15 +212,42 @@ impl DawnstoreCache {
         Ok(())
     }
 
-    /// Populate the permission cache from all RBAC objects returned by `backend`.
+    /// Return the current permission cache generation.
+    ///
+    /// Call this immediately before detecting a cache miss, then pass the result
+    /// to [`Self::init_permission`]. If another concurrent rebuild completes while
+    /// the caller waits for the rebuild lock, `init_permission` detects the
+    /// advanced generation and skips the redundant DB scan.
+    pub fn permission_generation(&self) -> u64 {
+        self.permission.read().unwrap().generation
+    }
+
+    /// Rebuild the permission cache from all RBAC objects in `backend`.
+    ///
+    /// At most one rebuild runs at a time: callers that arrive while a rebuild
+    /// is already in progress wait for the lock and then check whether the
+    /// generation advanced while they waited. If it did, the cache was already
+    /// refreshed and the function returns immediately without touching the DB.
+    ///
+    /// Pass `generation_at_miss` as the value returned by
+    /// [`Self::permission_generation`] just before the cache miss was detected.
+    /// On startup, pass `0`.
     pub async fn init_permission<B: DawnstoreBackend>(
         &self,
         backend: &B,
+        generation_at_miss: u64,
     ) -> Result<(), DawnStoreError> {
+        let _guard = self.permission_rebuild_lock.lock().await;
+        // If the generation advanced while we were waiting, another task already
+        // completed a fresh rebuild — skip the redundant DB scan.
+        if self.permission.read().unwrap().generation > generation_at_miss {
+            return Ok(());
+        }
         let (permissions, resource_index) = build_full_permission_cache(backend).await?;
         let mut state = self.permission.write().unwrap();
         state.permissions = permissions;
         state.resource_index = resource_index;
+        state.generation += 1;
         Ok(())
     }
 
