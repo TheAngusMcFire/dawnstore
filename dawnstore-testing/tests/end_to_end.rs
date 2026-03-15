@@ -857,6 +857,42 @@ async fn issue_token_non_superadmin_is_forbidden(pool: PgPool) -> sqlx::Result<(
     Ok(())
 }
 
+/// Issue-token must reject requests that reference a non-existent ServiceAccount.
+/// Previously `issue_token` called `upsert_objects` directly and bypassed FK
+/// validation, so a token could be issued for a SA that did not exist.
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn issue_token_rejects_nonexistent_service_account(pool: PgPool) -> sqlx::Result<()> {
+    let server = spawn_rbac_server(pool).await;
+
+    let resp = server
+        .api
+        .get_client()
+        .post(format!("{}/rbac/issue-token", server.api.get_base_url()))
+        .bearer_auth(&server.bootstrap_token)
+        .json(&serde_json::json!({
+            "namespace": "system",
+            "service_account": "ghost",      // does not exist
+            "token_name": "ghost-token"
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert!(resp.status().is_success(), "response envelope status: {}", resp.status());
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(!body["error"].is_null(), "expected an error for non-existent SA: {body}");
+
+    // Confirm no token object was persisted.
+    let r = http_get_objects(&server, &server.bootstrap_token, serde_json::json!({
+        "namespace": "system", "kind": "serviceaccounttoken", "name": "ghost-token"
+    })).await;
+    assert!(r["error"].is_null(), "get must not error: {r}");
+    let items = get_resp_data_array(&r);
+    assert!(items.is_empty(), "token object must not have been created: {r}");
+
+    Ok(())
+}
+
 // ── JWT authentication negative cases ────────────────────────────────────────
 
 /// Helper: POST to any protected endpoint with the given raw Authorization value.

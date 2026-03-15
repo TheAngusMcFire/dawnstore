@@ -278,6 +278,20 @@ async fn issue_token<B: DawnstoreBackend + 'static>(
 
     let sa_ref = object_string_id(&req.namespace, KIND_SERVICE_ACCOUNT, &req.service_account);
 
+    // Verify the ServiceAccount exists before creating a token for it.
+    // The normal apply flow does this via FK graph walk; here we do it explicitly
+    // since issue_token calls upsert_objects directly.
+    match state.backend.get_object(&req.namespace, KIND_SERVICE_ACCOUNT, &req.service_account).await {
+        Err(e) => return api_err(e),
+        Ok(None) => return api_err(DawnStoreError::ObjectValidationForeignKeyNotFound {
+            api_version: API_VERSION_V1.to_string(),
+            kind: KIND_SERVICE_ACCOUNT_TOKEN.to_string(),
+            name: req.token_name.clone(),
+            value: sa_ref.clone(),
+        }),
+        Ok(Some(_)) => {} // SA exists — proceed
+    }
+
     let token_obj: Object<ServiceAccountToken> = Object {
         api_version: Some(API_VERSION_V1.to_string()),
         kind: Some(KIND_SERVICE_ACCOUNT_TOKEN.to_string()),

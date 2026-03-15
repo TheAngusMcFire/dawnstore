@@ -116,7 +116,7 @@ Nav-props are spec fields whose name ends in `_object` (singular FK) or `_object
 
 **Superadmin** is identified by `claims.namespace == "system" && claims.sub == "superadmin"` — no DB lookup. `is_superadmin` lives in `cache.rs` and bypasses all permission checks.
 
-**Token issuance**: `/rbac/issue-token` is superadmin-only. It calls `backend.upsert_objects` directly (bypassing the normal apply flow), so FK validation against the `ServiceAccount` is not performed. JWTs are not revocable server-side — deleting the `ServiceAccountToken` object does not invalidate existing JWTs; they remain valid until `exp`.
+**Token issuance**: `/rbac/issue-token` is superadmin-only. It calls `backend.upsert_objects` directly (bypassing the normal apply flow) but explicitly verifies the referenced `ServiceAccount` exists before creating the token.
 
 ### Known Security Issues (open, tracked in docs/todo.md)
 
@@ -126,7 +126,7 @@ Nav-props are spec fields whose name ends in `_object` (singular FK) or `_object
 | 2 | Apply/Delete namespace check uses `_namespace` (unused) — namespace-scoped grants apply cross-namespace | `handlers/apply.rs`, `handlers/delete.rs` |
 | 3 | Namespace restriction bypassed by embedding a `Namespace` object in a nav-prop field | `controllers.rs`, `handlers/apply.rs` |
 | 4 | No RBAC escalation prevention — Apply on `role`/`rolebinding` allows self-elevation | `handlers/apply.rs` |
-| 5 | `issue_token` skips FK validation — token can reference a non-existent `ServiceAccount` | `controllers.rs` |
+| 5 | ~~`issue_token` skips FK validation — token can reference a non-existent `ServiceAccount`~~ **FIXED** | `controllers.rs` |
 | 6 | Deleting a `ServiceAccount` does not invalidate its cached permissions | `handlers/delete.rs`, `cache.rs` |
 | 7 | Concurrent cache miss → N parallel full DB scans with no deduplication | `cache.rs` |
 | 8 | Object names with `/` create ambiguous string IDs | `handlers/apply.rs`, `rbac/helpers.rs` |
