@@ -16,6 +16,7 @@ use crate::rbac::constants::{
 };
 use crate::rbac::helpers::object_string_id;
 use crate::rbac::middleware::Claims;
+use crate::rbac::models::{GlobalRole, GlobalRoleBinding, PolicyRule, Role, RoleBinding};
 
 // ── Private helpers ───────────────────────────────────────────────────────────
 
@@ -515,6 +516,190 @@ async fn walk_foreign_key_graph<B: DawnstoreBackend>(
     Ok(relations)
 }
 
+// ── Privilege-escalation prevention ───────────────────────────────────────────
+
+/// Returns `true` if `caller_perms` covers every (verb, kind) pair in `rule`,
+/// meaning the caller is entitled to grant those permissions to others.
+///
+/// For namespace-scoped roles (`global_only = false`) both namespaced and global
+/// grants are accepted, subject to the usual namespace equality constraint.
+/// For cluster-wide roles (`global_only = true`) only global grants are accepted,
+/// because a namespace-scoped grant cannot confer cross-namespace power.
+///
+/// The names restriction is handled conservatively: a scope that is restricted to
+/// a specific set of names can only satisfy a rule whose names restriction is equal
+/// or narrower. An unrestricted scope (names = `None`) satisfies any rule.
+fn caller_can_grant_rule(
+    perms: &EffectivePermissions,
+    rule: &PolicyRule,
+    caller_ns: &str,
+    target_ns: &str,
+    global_only: bool,
+) -> bool {
+    for verb_str in &rule.verbs {
+        let Some(verb) = Verb::from_str(verb_str) else {
+            return false; // unknown verb → conservatively deny
+        };
+        for rule_kind in &rule.kinds {
+            let scope_covers = |scope: &GrantedScope| -> bool {
+                if !scope.verbs.contains(&verb) {
+                    return false;
+                }
+                // If the rule grants "*" (all kinds), the caller's grant must also
+                // be "*". If the rule names a specific kind, "*" or that kind suffices.
+                let kind_ok = if rule_kind == "*" {
+                    scope.kinds.iter().any(|k| k == "*")
+                } else {
+                    scope.kinds.iter().any(|k| k == "*" || k == rule_kind)
+                };
+                if !kind_ok {
+                    return false;
+                }
+                // The caller's names restriction must be at least as permissive as
+                // the rule's restriction. If the caller is restricted to a set of
+                // names, the rule must also be restricted and must be a subset.
+                match (&scope.names, &rule.names) {
+                    (None, _) => true,
+                    (Some(_), None) => false,
+                    (Some(caller_names), Some(rule_names)) => {
+                        rule_names.iter().all(|rn| caller_names.iter().any(|cn| cn == rn))
+                    }
+                }
+            };
+            let allowed = if global_only {
+                perms.global.iter().any(scope_covers)
+            } else {
+                (caller_ns == target_ns && perms.namespaced.iter().any(scope_covers))
+                    || perms.global.iter().any(scope_covers)
+            };
+            if !allowed {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// Retrieve the spec JSON for an object by its canonical `namespace/kind/name`
+/// string ID. Checks `batch` first so objects in the same apply request can
+/// reference each other without a round-trip; falls back to `backend`.
+async fn get_spec_by_sid<B: DawnstoreBackend>(
+    batch: &HashMap<String, serde_json::Value>,
+    backend: &B,
+    sid: &str,
+) -> Result<Option<serde_json::Value>, DawnStoreError> {
+    if let Some(spec) = batch.get(sid) {
+        return Ok(Some(spec.clone()));
+    }
+    let parts: Vec<&str> = sid.splitn(3, '/').collect();
+    match parts.as_slice() {
+        [ns, kind, name] => Ok(backend.get_object(ns, kind, name).await?.map(|o| o.spec)),
+        _ => Ok(None),
+    }
+}
+
+/// Enforce that `caller` is not escalating privileges through RBAC objects.
+///
+/// A principal must not be able to grant permissions they do not themselves hold.
+/// This check applies to all four RBAC kinds:
+/// - `Role` / `GlobalRole`: every rule in the spec must be within the caller's own grants.
+/// - `RoleBinding` / `GlobalRoleBinding`: the referenced role is fetched (from
+///   the current batch or the backend) and its rules are checked against the caller.
+///
+/// The check is skipped entirely for unauthenticated callers and the system
+/// superadmin, which are both unrestricted.
+async fn check_rbac_escalation<B: DawnstoreBackend>(
+    backend: &B,
+    cache: &DawnstoreCache,
+    caller: Option<&Claims>,
+    objects: &[ObjectAny],
+) -> Result<(), DawnStoreError> {
+    let Some(caller) = caller else {
+        return Ok(()); // unauthenticated / superadmin path
+    };
+    if is_superadmin(caller) {
+        return Ok(());
+    }
+
+    // Load caller's effective permissions (cache hit fast path, miss rebuild).
+    let perms = if let Some(p) = cache.get_permissions(&caller.namespace, &caller.sub) {
+        p
+    } else {
+        cache.init_permission(backend).await?;
+        cache.get_permissions(&caller.namespace, &caller.sub).unwrap_or_default()
+    };
+
+    // Build a batch spec index: canonical `namespace/kind/name` → spec JSON.
+    // Alias-resolve every kind so FK lookups against this index always use the
+    // canonical form (e.g. `"ro"` → `"role"`).
+    let mut batch: HashMap<String, serde_json::Value> = HashMap::new();
+    for obj in objects {
+        let ns = obj.namespace.as_deref().unwrap_or("default");
+        let raw_kind = obj.kind.as_deref().unwrap_or("");
+        let canonical_kind =
+            cache.resolve_kind(raw_kind).await.unwrap_or_else(|| raw_kind.to_string());
+        let sid = object_string_id(ns, &canonical_kind, &obj.name);
+        batch.insert(sid, obj.spec.clone());
+    }
+
+    for obj in objects {
+        let ns = obj.namespace.as_deref().unwrap_or("default");
+        let raw_kind = obj.kind.as_deref().unwrap_or("");
+        let canonical_kind =
+            cache.resolve_kind(raw_kind).await.unwrap_or_else(|| raw_kind.to_string());
+
+        match canonical_kind.as_str() {
+            KIND_ROLE => {
+                let role: Role = serde_json::from_value(obj.spec.clone())?;
+                for rule in &role.rules {
+                    if !caller_can_grant_rule(&perms, rule, &caller.namespace, ns, false) {
+                        return Err(DawnStoreError::Forbidden);
+                    }
+                }
+            }
+            KIND_GLOBAL_ROLE => {
+                let role: GlobalRole = serde_json::from_value(obj.spec.clone())?;
+                for rule in &role.rules {
+                    // Global roles apply across all namespaces; only global grants satisfy.
+                    if !caller_can_grant_rule(&perms, rule, &caller.namespace, ns, true) {
+                        return Err(DawnStoreError::Forbidden);
+                    }
+                }
+            }
+            KIND_ROLE_BINDING => {
+                let binding: RoleBinding = serde_json::from_value(obj.spec.clone())?;
+                let role_sid = resolve_fk_string(&binding.role, ns, Some(KIND_ROLE))
+                    .unwrap_or_else(|_| object_string_id(ns, KIND_ROLE, &binding.role));
+                if let Some(role_spec) = get_spec_by_sid(&batch, backend, &role_sid).await? {
+                    let role: Role = serde_json::from_value(role_spec)?;
+                    for rule in &role.rules {
+                        if !caller_can_grant_rule(&perms, rule, &caller.namespace, ns, false) {
+                            return Err(DawnStoreError::Forbidden);
+                        }
+                    }
+                }
+                // If the role is not found, the FK walk (next step) returns a proper error.
+            }
+            KIND_GLOBAL_ROLE_BINDING => {
+                let binding: GlobalRoleBinding = serde_json::from_value(obj.spec.clone())?;
+                let role_sid = resolve_fk_string(&binding.role, ns, Some(KIND_GLOBAL_ROLE))
+                    .unwrap_or_else(|_| object_string_id(ns, KIND_GLOBAL_ROLE, &binding.role));
+                if let Some(role_spec) = get_spec_by_sid(&batch, backend, &role_sid).await? {
+                    let role: GlobalRole = serde_json::from_value(role_spec)?;
+                    for rule in &role.rules {
+                        if !caller_can_grant_rule(&perms, rule, &caller.namespace, ns, true) {
+                            return Err(DawnStoreError::Forbidden);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    Ok(())
+}
+
 // ── Public API ────────────────────────────────────────────────────────────────
 
 /// Apply one or more objects from a raw JSON payload.
@@ -571,7 +756,11 @@ pub async fn apply<B: DawnstoreBackend>(
         validate_schema(cache, api_version, kind, &obj.name, &obj.spec).await?;
     }
 
-    // Steps 6 + 7: iterative FK graph walk — resolves, existence-checks, and
+    // Step 6: privilege-escalation check — reject if any RBAC object in the batch
+    // would grant permissions the caller does not themselves hold.
+    check_rbac_escalation(backend, cache, caller, &objects).await?;
+
+    // Steps 7 + 8: iterative FK graph walk — resolves, existence-checks, and
     // Get-permission-checks every FK target to arbitrary nesting depth.
     let relations = walk_foreign_key_graph(backend, cache, caller, &objects).await?;
 

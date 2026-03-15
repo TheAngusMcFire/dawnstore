@@ -1973,3 +1973,164 @@ async fn navprop_embedded_namespace_outside_system_is_rejected(pool: PgPool) -> 
 
     Ok(())
 }
+
+// ── Problem 4: privilege escalation prevention ────────────────────────────────
+
+/// A caller with a limited Role cannot create a Role that grants more permissions
+/// than they themselves hold.
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn caller_cannot_create_role_with_excess_permissions(pool: PgPool) -> sqlx::Result<()> {
+    let server = spawn_rbac_server(pool).await;
+    let sa = &server.bootstrap_token;
+
+    // Set up alice with a role that only grants `get` on `container`.
+    http_apply(&server, sa, serde_json::json!([
+        {"api_version": "v1", "kind": "namespace", "namespace": "system", "name": "myns"},
+        {"api_version": "v1", "kind": "serviceaccount", "namespace": "myns", "name": "alice"}
+    ])).await;
+
+    // Alice's role: get on container AND apply/get on role (so she can create roles).
+    let r = http_apply(&server, sa, serde_json::json!({
+        "api_version": "v1", "kind": "role", "namespace": "myns", "name": "getter",
+        "rules": [
+            {"api_version": "*", "kinds": ["container"], "verbs": ["get"]},
+            {"api_version": "*", "kinds": ["role"], "verbs": ["apply", "get"]}
+        ]
+    })).await;
+    assert!(r["error"].is_null(), "superadmin seeding getter role: {r}");
+
+    let r = http_apply(&server, sa, serde_json::json!({
+        "api_version": "v1", "kind": "rolebinding", "namespace": "myns", "name": "bind-alice",
+        "role": "role/getter",
+        "subjects": ["serviceaccount/alice"]
+    })).await;
+    assert!(r["error"].is_null(), "superadmin binding alice: {r}");
+
+    let alice_jwt = issue_jwt(&server, "myns", "alice", "alice-token").await;
+
+    // Alice tries to create a role with `apply` on container (which she doesn't have).
+    let r = http_apply(&server, &alice_jwt, serde_json::json!({
+        "api_version": "v1", "kind": "role", "namespace": "myns", "name": "escalated",
+        "rules": [{"api_version": "*", "kinds": ["container"], "verbs": ["apply"]}]
+    })).await;
+    assert!(!r["error"].is_null(), "alice must not create a role with excess permissions: {r}");
+    assert_eq!(r["error"]["type"], "forbidden", "expected forbidden: {r}");
+
+    // Alice can create a role with only `get` on container (which she does have).
+    let r = http_apply(&server, &alice_jwt, serde_json::json!({
+        "api_version": "v1", "kind": "role", "namespace": "myns", "name": "ok-role",
+        "rules": [{"api_version": "*", "kinds": ["container"], "verbs": ["get"]}]
+    })).await;
+    assert!(r["error"].is_null(), "alice should be able to create a role within her own permissions: {r}");
+
+    Ok(())
+}
+
+/// A caller cannot create a RoleBinding that references a Role granting more
+/// permissions than the caller holds, even if they can `apply` the binding.
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn caller_cannot_bind_role_with_excess_permissions(pool: PgPool) -> sqlx::Result<()> {
+    let server = spawn_rbac_server(pool).await;
+    let sa = &server.bootstrap_token;
+
+    // Create alice with `apply` on `rolebinding` but only `get` on `container`.
+    // The powerful role she'll try to bind grants `apply` on `container`.
+    http_apply(&server, sa, serde_json::json!([
+        {"api_version": "v1", "kind": "namespace", "namespace": "system", "name": "bindns"},
+        {"api_version": "v1", "kind": "serviceaccount", "namespace": "bindns", "name": "alice"}
+    ])).await;
+
+    // A powerful role that alice does not possess herself.
+    let r = http_apply(&server, sa, serde_json::json!({
+        "api_version": "v1", "kind": "role", "namespace": "bindns", "name": "powerful",
+        "rules": [{"api_version": "*", "kinds": ["container"], "verbs": ["apply", "delete"]}]
+    })).await;
+    assert!(r["error"].is_null(), "superadmin creates powerful role: {r}");
+
+    // Alice's own role: she can apply rolebindings and get containers, but not apply/delete them.
+    let r = http_apply(&server, sa, serde_json::json!({
+        "api_version": "v1", "kind": "role", "namespace": "bindns", "name": "alice-role",
+        "rules": [
+            {"api_version": "*", "kinds": ["rolebinding"], "verbs": ["apply", "get"]},
+            {"api_version": "*", "kinds": ["container"], "verbs": ["get"]}
+        ]
+    })).await;
+    assert!(r["error"].is_null(), "superadmin creates alice-role: {r}");
+
+    let r = http_apply(&server, sa, serde_json::json!({
+        "api_version": "v1", "kind": "rolebinding", "namespace": "bindns", "name": "bind-alice",
+        "role": "role/alice-role",
+        "subjects": ["serviceaccount/alice"]
+    })).await;
+    assert!(r["error"].is_null(), "superadmin binds alice: {r}");
+
+    let alice_jwt = issue_jwt(&server, "bindns", "alice", "alice-token").await;
+
+    // Create a target SA that alice would bind to the powerful role.
+    http_apply(&server, sa, serde_json::json!({
+        "api_version": "v1", "kind": "serviceaccount", "namespace": "bindns", "name": "victim"
+    })).await;
+
+    // Alice tries to bind `victim` to the powerful role — this escalates privileges.
+    let r = http_apply(&server, &alice_jwt, serde_json::json!({
+        "api_version": "v1", "kind": "rolebinding", "namespace": "bindns", "name": "escalation-binding",
+        "role": "role/powerful",
+        "subjects": ["serviceaccount/victim"]
+    })).await;
+    assert!(!r["error"].is_null(), "alice must not bind a role exceeding her own permissions: {r}");
+    assert_eq!(r["error"]["type"], "forbidden", "expected forbidden: {r}");
+
+    Ok(())
+}
+
+/// A caller with only namespace-scoped grants cannot create a GlobalRole (which
+/// would confer cross-namespace powers they do not hold).
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn namespaced_caller_cannot_create_global_role(pool: PgPool) -> sqlx::Result<()> {
+    let server = spawn_rbac_server(pool).await;
+    let sa = &server.bootstrap_token;
+
+    http_apply(&server, sa, serde_json::json!([
+        {"api_version": "v1", "kind": "namespace", "namespace": "system", "name": "testns"},
+        {"api_version": "v1", "kind": "serviceaccount", "namespace": "testns", "name": "alice"}
+    ])).await;
+
+    // Alice has full apply/get/delete on container via a *namespace-scoped* role.
+    let r = http_apply(&server, sa, serde_json::json!({
+        "api_version": "v1", "kind": "role", "namespace": "testns", "name": "full",
+        "rules": [{"api_version": "*", "kinds": ["container"], "verbs": ["get", "apply", "delete"]}]
+    })).await;
+    assert!(r["error"].is_null(), "superadmin creates full role: {r}");
+
+    // Also give alice permission to apply globalrole objects.
+    let r = http_apply(&server, sa, serde_json::json!({
+        "api_version": "v1", "kind": "role", "namespace": "testns", "name": "rbac-role",
+        "rules": [{"api_version": "*", "kinds": ["globalrole"], "verbs": ["apply", "get"]}]
+    })).await;
+    assert!(r["error"].is_null(), "superadmin creates rbac-role: {r}");
+
+    let r = http_apply(&server, sa, serde_json::json!([
+        {
+            "api_version": "v1", "kind": "rolebinding", "namespace": "testns", "name": "bind-alice",
+            "role": "role/full", "subjects": ["serviceaccount/alice"]
+        },
+        {
+            "api_version": "v1", "kind": "rolebinding", "namespace": "testns", "name": "bind-alice-rbac",
+            "role": "role/rbac-role", "subjects": ["serviceaccount/alice"]
+        }
+    ])).await;
+    assert!(r["error"].is_null(), "superadmin binds alice: {r}");
+
+    let alice_jwt = issue_jwt(&server, "testns", "alice", "alice-token").await;
+
+    // Alice tries to create a GlobalRole granting container access across all namespaces.
+    // She holds the permission namespace-scoped only, so this must be rejected.
+    let r = http_apply(&server, &alice_jwt, serde_json::json!({
+        "api_version": "v1", "kind": "globalrole", "namespace": "testns", "name": "evil-global",
+        "rules": [{"api_version": "*", "kinds": ["container"], "verbs": ["get", "apply", "delete"]}]
+    })).await;
+    assert!(!r["error"].is_null(), "namespaced caller must not create a GlobalRole: {r}");
+    assert_eq!(r["error"]["type"], "forbidden", "expected forbidden: {r}");
+
+    Ok(())
+}
