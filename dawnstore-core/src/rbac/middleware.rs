@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use axum::{
     extract::{Request, State},
     http::StatusCode,
@@ -7,18 +9,21 @@ use axum::{
 
 use super::jwt_service::validate_token;
 pub use super::jwt_service::Claims;
+use crate::cache::DawnstoreCache;
 
-/// Axum middleware state holding the EC public key PEM bytes.
+/// Axum middleware state holding the EC public key and the token-revocation cache.
 #[derive(Clone)]
 pub struct JwtAuthState {
     pub public_key_pem: Vec<u8>,
+    pub cache: Arc<DawnstoreCache>,
 }
 
 /// Axum middleware that validates the `Authorization: Bearer <token>` header.
 ///
 /// On success, inserts the validated [`Claims`] into request extensions so
 /// downstream handlers can extract them via `Extension<Claims>`.
-/// Returns `401` if the header is missing or the token is invalid.
+/// Returns `401` if the header is missing, the token is invalid, or the
+/// corresponding `ServiceAccountToken` object has been deleted (revoked).
 pub async fn jwt_auth_middleware(
     State(state): State<JwtAuthState>,
     mut request: Request,
@@ -33,6 +38,9 @@ pub async fn jwt_auth_middleware(
 
     match validate_token(token, &state.public_key_pem) {
         Ok(claims) => {
+            if !state.cache.is_token_valid(claims.token_id) {
+                return (StatusCode::UNAUTHORIZED, "token has been revoked").into_response();
+            }
             request.extensions_mut().insert(claims);
             next.run(request).await
         }

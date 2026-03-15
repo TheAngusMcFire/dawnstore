@@ -6,6 +6,7 @@ use crate::error::DawnStoreError;
 use crate::cache::{EffectivePermissions, Verb, is_superadmin};
 use crate::rbac::constants::{
     KIND_GLOBAL_ROLE, KIND_GLOBAL_ROLE_BINDING, KIND_ROLE, KIND_ROLE_BINDING,
+    KIND_SERVICE_ACCOUNT_TOKEN,
 };
 use crate::rbac::helpers::object_string_id;
 use crate::rbac::middleware::Claims;
@@ -80,6 +81,12 @@ fn is_rbac_kind(kind: &str) -> bool {
     matches!(kind, KIND_ROLE | KIND_GLOBAL_ROLE | KIND_ROLE_BINDING | KIND_GLOBAL_ROLE_BINDING)
 }
 
+/// Returns `true` if `kind` is a `ServiceAccountToken` whose deletion must
+/// revoke the corresponding JWT from the token-validity cache.
+fn is_token_kind(kind: &str) -> bool {
+    kind == KIND_SERVICE_ACCOUNT_TOKEN
+}
+
 // ── Public API ────────────────────────────────────────────────────────────────
 
 /// Delete the object identified by `request`, enforcing RBAC for authenticated callers.
@@ -119,12 +126,25 @@ pub async fn delete<B: DawnstoreBackend>(
         });
     }
 
-    // Step 4: delete from backend.
+    // Step 4: if this is a ServiceAccountToken, fetch its UUID before deletion
+    // so we can revoke the corresponding JWT from the token-validity cache.
+    let token_id_to_revoke = if is_token_kind(&kind) {
+        backend.get_object(namespace, &kind, &request.name).await?.map(|o| o.id)
+    } else {
+        None
+    };
+
+    // Step 5: delete from backend.
     backend.delete_object(namespace, &kind, &request.name).await?;
 
-    // Step 5: invalidate RBAC cache for deleted RBAC resources.
+    // Step 6: invalidate RBAC cache for deleted RBAC resources.
     if is_rbac_kind(&kind) {
         cache.invalidate_permissions(&object_string_id(namespace, &kind, &request.name));
+    }
+
+    // Step 7: revoke the JWT for a deleted ServiceAccountToken.
+    if let Some(token_id) = token_id_to_revoke {
+        cache.remove_token(token_id);
     }
 
     Ok(())

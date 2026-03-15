@@ -188,14 +188,20 @@ pub async fn bootstrap<B: DawnstoreBackend>(
 pub fn get_rbac_routes<B: DawnstoreBackend + 'static>(
     backend: Arc<B>,
     private_key_pem: Vec<u8>,
+    cache: Arc<crate::cache::DawnstoreCache>,
 ) -> Router {
-    crate::controllers::get_rbac_token_routes(backend, private_key_pem)
+    crate::controllers::get_rbac_token_routes(backend, private_key_pem, cache)
 }
 
 /// Wrap `router` with JWT authentication middleware.
 ///
 /// `public_key_pem` is the PEM-encoded EC public key used to verify tokens.
-pub fn with_jwt_auth(router: Router, public_key_pem: Vec<u8>) -> Router {
-    let state = JwtAuthState { public_key_pem };
+/// `cache` is used to check whether each incoming token has been revoked.
+pub fn with_jwt_auth(
+    router: Router,
+    public_key_pem: Vec<u8>,
+    cache: Arc<crate::cache::DawnstoreCache>,
+) -> Router {
+    let state = JwtAuthState { public_key_pem, cache };
     router.layer(from_fn_with_state(state, jwt_auth_middleware))
 }

@@ -425,6 +425,30 @@ impl PostgresBackend {
             return Ok(objects);
         }
 
+        // Strip FK targets the caller is not allowed to see before injecting
+        // them as navigation properties. This prevents a caller with Get on a
+        // parent kind from reading FK-target objects they have no access to.
+        // Semantics mirror the `allowed` filter on the main query:
+        //   None       → unrestricted (superadmin / unauthenticated)
+        //   Some([])   → deny all
+        //   Some([..]) → restrict to matching scopes
+        let foreign_objects: Vec<ReturnAny> = match &filter.allowed {
+            None => foreign_objects,
+            Some(scopes) => foreign_objects
+                .into_iter()
+                .filter(|o| {
+                    scopes.iter().any(|scope| {
+                        scope.namespace.as_deref().map_or(true, |ns| ns == o.namespace)
+                            && (scope.kind == "*" || scope.kind == o.kind)
+                            && scope
+                                .names
+                                .as_ref()
+                                .map_or(true, |names| names.contains(&o.name))
+                    })
+                })
+                .collect(),
+        };
+
         let mut objects = objects;
         for obj in &mut objects {
             let fk_constraints_raw =

@@ -602,10 +602,12 @@ async fn spawn_rbac_server(pool: PgPool) -> RbacTestServer {
     let rbac_routes = dawnstore_core::rbac::get_rbac_routes(
         Arc::clone(&backend),
         keypair.private_key_pem.clone(),
+        Arc::clone(&cache),
     );
     let app = dawnstore_core::rbac::with_jwt_auth(
         Router::new().merge(dawnstore_routes).merge(rbac_routes),
         keypair.public_key_pem.clone(),
+        Arc::clone(&cache),
     );
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1684,6 +1686,196 @@ async fn rbac_test_yaml_fixture_roles_are_enforced(pool: PgPool) -> sqlx::Result
     })).await;
     assert!(!r["error"].is_null(), "carol must NOT be able to delete: {r}");
     assert_eq!(r["error"]["type"], "forbidden", "expected forbidden, got: {r}");
+
+    Ok(())
+}
+
+// ── Nav-prop permission enforcement ──────────────────────────────────────────
+
+/// A caller that can GET `rolebinding` but NOT `role` or `serviceaccount`
+/// must receive `role_object` and `subjects_objects` as absent in the response
+/// even when `fill_child_foreign_keys` is true.
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn navprop_hidden_when_caller_lacks_fk_target_permission(pool: PgPool) -> sqlx::Result<()> {
+    let server = spawn_rbac_server(pool).await;
+    let sa = &server.bootstrap_token;
+
+    // Set up namespace, service accounts, role, role binding.
+    let r = http_apply(&server, sa, serde_json::json!([
+        {"api_version": "v1", "kind": "namespace", "namespace": "system", "name": "np-test"},
+        {"api_version": "v1", "kind": "serviceaccount", "namespace": "np-test", "name": "reader"},
+        {"api_version": "v1", "kind": "serviceaccount", "namespace": "np-test", "name": "target-sa"},
+        // Role grants only GET on rolebinding — NOT on role or serviceaccount.
+        {
+            "api_version": "v1", "kind": "role", "namespace": "np-test", "name": "rb-only",
+            "rules": [{"api_version": "*", "kinds": ["rolebinding"], "verbs": ["get"]}]
+        },
+        {
+            "api_version": "v1", "kind": "role", "namespace": "np-test", "name": "target-role",
+            "rules": [{"api_version": "*", "kinds": ["*"], "verbs": ["get"]}]
+        },
+        {
+            "api_version": "v1", "kind": "rolebinding", "namespace": "np-test", "name": "bind-reader",
+            "role": "role/rb-only",
+            "subjects": ["serviceaccount/reader"]
+        },
+        {
+            "api_version": "v1", "kind": "rolebinding", "namespace": "np-test", "name": "target-rb",
+            "role": "role/target-role",
+            "subjects": ["serviceaccount/target-sa"]
+        }
+    ])).await;
+    assert!(r["error"].is_null(), "fixture apply must succeed: {r}");
+
+    let reader_jwt = issue_jwt(&server, "np-test", "reader", "reader-token").await;
+
+    // Reader fetches role bindings with fill_child_foreign_keys.
+    let r = http_get_objects(&server, &reader_jwt, serde_json::json!({
+        "namespace": "np-test",
+        "kind": "rolebinding",
+        "fill_child_foreign_keys": true
+    })).await;
+    assert!(r["error"].is_null(), "reader must be able to get rolebindings: {r}");
+
+    let items = get_resp_data_array(&r);
+    // reader's own binding + the target binding — both visible (rolebinding GET is allowed)
+    assert!(!items.is_empty(), "must see at least one rolebinding: {r}");
+
+    for item in &items {
+        // role_object and subjects_objects must be absent because the caller cannot GET role/serviceaccount.
+        assert!(
+            item["spec"]["role_object"].is_null(),
+            "role_object must be absent for restricted caller: {item}"
+        );
+        assert!(
+            item["spec"]["subjects_objects"].is_null(),
+            "subjects_objects must be absent for restricted caller: {item}"
+        );
+    }
+
+    Ok(())
+}
+
+/// A caller that can GET `rolebinding`, `role`, and `serviceaccount`
+/// must receive populated `role_object` and `subjects_objects` nav-props.
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn navprop_populated_when_caller_has_fk_target_permission(pool: PgPool) -> sqlx::Result<()> {
+    let server = spawn_rbac_server(pool).await;
+    let sa = &server.bootstrap_token;
+
+    // Set up namespace, service accounts, roles, role bindings.
+    let r = http_apply(&server, sa, serde_json::json!([
+        {"api_version": "v1", "kind": "namespace", "namespace": "system", "name": "np-full"},
+        {"api_version": "v1", "kind": "serviceaccount", "namespace": "np-full", "name": "full-reader"},
+        {"api_version": "v1", "kind": "serviceaccount", "namespace": "np-full", "name": "member-sa"},
+        {
+            "api_version": "v1", "kind": "role", "namespace": "np-full", "name": "member-role",
+            "rules": [{"api_version": "*", "kinds": ["*"], "verbs": ["get"]}]
+        },
+        // full-reader's own role grants GET on rolebinding, role, and serviceaccount.
+        {
+            "api_version": "v1", "kind": "role", "namespace": "np-full", "name": "full-access",
+            "rules": [{
+                "api_version": "*",
+                "kinds": ["rolebinding", "role", "serviceaccount"],
+                "verbs": ["get"]
+            }]
+        },
+        {
+            "api_version": "v1", "kind": "rolebinding", "namespace": "np-full", "name": "bind-full-reader",
+            "role": "role/full-access",
+            "subjects": ["serviceaccount/full-reader"]
+        },
+        {
+            "api_version": "v1", "kind": "rolebinding", "namespace": "np-full", "name": "target-rb",
+            "role": "role/member-role",
+            "subjects": ["serviceaccount/member-sa"]
+        }
+    ])).await;
+    assert!(r["error"].is_null(), "fixture apply must succeed: {r}");
+
+    let full_reader_jwt = issue_jwt(&server, "np-full", "full-reader", "full-reader-token").await;
+
+    let r = http_get_objects(&server, &full_reader_jwt, serde_json::json!({
+        "namespace": "np-full",
+        "kind": "rolebinding",
+        "name": "target-rb",
+        "fill_child_foreign_keys": true
+    })).await;
+    assert!(r["error"].is_null(), "full-reader must be able to get rolebindings: {r}");
+
+    let items = get_resp_data_array(&r);
+    assert_eq!(items.len(), 1, "must see exactly target-rb: {r}");
+    let item = &items[0];
+
+    // role_object must be populated with the bound role.
+    assert!(
+        !item["spec"]["role_object"].is_null(),
+        "role_object must be populated for full-access caller: {item}"
+    );
+    assert_eq!(
+        item["spec"]["role_object"]["name"], "member-role",
+        "role_object must point to member-role: {item}"
+    );
+
+    // subjects_objects must be a non-empty array containing member-sa.
+    let subjects_objects = item["spec"]["subjects_objects"].as_array();
+    assert!(
+        subjects_objects.is_some() && !subjects_objects.unwrap().is_empty(),
+        "subjects_objects must be populated for full-access caller: {item}"
+    );
+    assert_eq!(
+        subjects_objects.unwrap()[0]["name"], "member-sa",
+        "subjects_objects[0] must be member-sa: {item}"
+    );
+
+    Ok(())
+}
+
+// ── Token revocation ──────────────────────────────────────────────────────────
+
+/// Deleting a `ServiceAccountToken` object must immediately reject any JWT
+/// that was derived from it, even if the JWT has not yet expired.
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn deleted_token_is_rejected(pool: PgPool) -> sqlx::Result<()> {
+    let server = spawn_rbac_server(pool).await;
+    let sa = &server.bootstrap_token;
+
+    // Create a namespace and service account.
+    let r = http_apply(&server, sa, serde_json::json!([
+        {"api_version": "v1", "kind": "namespace", "namespace": "system", "name": "revoke-test"},
+        {"api_version": "v1", "kind": "serviceaccount", "namespace": "revoke-test", "name": "alice"}
+    ])).await;
+    assert!(r["error"].is_null(), "fixture apply must succeed: {r}");
+
+    // Issue a token for alice — this goes through /rbac/issue-token and adds the
+    // UUID to the valid-token cache.
+    let alice_jwt = issue_jwt(&server, "revoke-test", "alice", "alice-token").await;
+
+    // The JWT must work before revocation.
+    let r = http_get_objects(&server, &alice_jwt, serde_json::json!({
+        "namespace": "revoke-test", "kind": "serviceaccount"
+    })).await;
+    // alice has no role bindings so she gets an empty list — but NOT a 401.
+    assert!(r["error"].is_null(), "alice JWT must be accepted before revocation: {r}");
+
+    // Delete the ServiceAccountToken object — this should revoke the JWT.
+    let r = http_delete(&server, sa, serde_json::json!({
+        "namespace": "revoke-test", "kind": "serviceaccounttoken", "name": "alice-token"
+    })).await;
+    assert!(r["error"].is_null(), "superadmin must be able to delete the token: {r}");
+
+    // The same JWT must now be rejected with 401.
+    let resp = server
+        .api
+        .get_client()
+        .post(format!("{}/get-objects", server.api.get_base_url()))
+        .bearer_auth(&alice_jwt)
+        .json(&serde_json::json!({"namespace": "revoke-test", "kind": "serviceaccount"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 401, "revoked JWT must be rejected with 401");
 
     Ok(())
 }

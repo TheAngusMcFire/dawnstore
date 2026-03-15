@@ -64,11 +64,12 @@ async fn main() -> eyre::Result<()> {
 
     let dawnstore_routes = get_dawnstore_routes(Arc::clone(&backend), Arc::clone(&cache));
     let rbac_routes =
-        dawnstore_core::rbac::get_rbac_routes(Arc::clone(&backend), private_key_pem);
+        dawnstore_core::rbac::get_rbac_routes(Arc::clone(&backend), private_key_pem, Arc::clone(&cache));
 
     let app = dawnstore_core::rbac::with_jwt_auth(
         Router::new().merge(dawnstore_routes).merge(rbac_routes),
         public_key_pem,
+        Arc::clone(&cache),
     );
 
     let listener = TcpListener::bind("::0:8080").await.unwrap();

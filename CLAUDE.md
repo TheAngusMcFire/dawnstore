@@ -93,3 +93,42 @@ This is a Cargo workspace with 5 crates implementing a Kubernetes-like generic o
 Initialised via `DawnstoreCache::init(backend)` or per-store via `init_schema`, `init_foreign_key`, `init_permission`. All init functions take `&impl NewDawnStoreBackend`.
 
 **`dawnstore-postgres` (`CacheStore`)** — legacy postgres-specific cache, kept during the refactor. Will be superseded by `DawnstoreCache`.
+
+### Navigation Properties
+
+Nav-props are spec fields whose name ends in `_object` (singular FK) or `_objects` (list FK). They are **not stored** — they are populated on GET when `fill_child_foreign_keys: true` is set, and stripped before storage on apply.
+
+**On apply** (`handlers/apply.rs::extract_navigation_properties`): fields ending in `_object`/`_objects` are removed from the parent spec and prepended to the batch as independent objects. They go through the full apply pipeline (permission check, schema validation, FK walk, upsert). Nav-prop extraction runs **before** schema validation, so schemas with `deny_unknown_fields` never see those fields.
+
+**On GET** (`dawnstore-postgres`): FK target objects are fetched and injected under the corresponding field name. The injected objects are filtered against `filter.allowed` (the caller's effective permission scopes) before being returned, so callers cannot read FK targets they lack Get permission on.
+
+**Naming convention for model fields:**
+- `One` / `OneOptional` FK → `<field>_object: Option<ReturnObject<Box<T>>>`
+- `OneOrMany` / `NoneOrMany` FK → `<field>_objects: Option<Vec<ReturnObject<Box<T>>>>`
+
+### RBAC Permission Model
+
+**Namespace scoping is asymmetric across verbs:**
+- **GET**: namespace-scoped grants (from `RoleBinding`) are correctly restricted to the caller's own namespace via `AllowedScope` passed to the backend.
+- **Apply / Delete**: the `_namespace` parameter in `check_permission` and `check_delete_permission` is currently **unused** — namespace-scoped grants effectively apply across all namespaces for write operations. This is a known bug (tracked in `docs/todo.md`).
+
+**Cache invalidation** triggers on apply/delete of `role`, `globalrole`, `rolebinding`, `globalrolebinding`. It does **not** trigger on `serviceaccount` deletion (known gap).
+
+**Superadmin** is identified by `claims.namespace == "system" && claims.sub == "superadmin"` — no DB lookup. `is_superadmin` lives in `cache.rs` and bypasses all permission checks.
+
+**Token issuance**: `/rbac/issue-token` is superadmin-only. It calls `backend.upsert_objects` directly (bypassing the normal apply flow), so FK validation against the `ServiceAccount` is not performed. JWTs are not revocable server-side — deleting the `ServiceAccountToken` object does not invalidate existing JWTs; they remain valid until `exp`.
+
+### Known Security Issues (open, tracked in docs/todo.md)
+
+| # | Issue | Location |
+|---|-------|----------|
+| 1 | JWT not revocable — deleting token object has no effect | `jwt_service.rs`, `middleware.rs` |
+| 2 | Apply/Delete namespace check uses `_namespace` (unused) — namespace-scoped grants apply cross-namespace | `handlers/apply.rs`, `handlers/delete.rs` |
+| 3 | Namespace restriction bypassed by embedding a `Namespace` object in a nav-prop field | `controllers.rs`, `handlers/apply.rs` |
+| 4 | No RBAC escalation prevention — Apply on `role`/`rolebinding` allows self-elevation | `handlers/apply.rs` |
+| 5 | `issue_token` skips FK validation — token can reference a non-existent `ServiceAccount` | `controllers.rs` |
+| 6 | Deleting a `ServiceAccount` does not invalidate its cached permissions | `handlers/delete.rs`, `cache.rs` |
+| 7 | Concurrent cache miss → N parallel full DB scans with no deduplication | `cache.rs` |
+| 8 | Object names with `/` create ambiguous string IDs | `handlers/apply.rs`, `rbac/helpers.rs` |
+| 9 | Any `_object`/`_objects` spec field is silently extracted; failed deserialization is swallowed | `handlers/apply.rs` |
+| 10 | No request body size limit | All handlers |

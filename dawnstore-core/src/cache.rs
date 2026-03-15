@@ -1,13 +1,15 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 
+use uuid::Uuid;
+
 use tokio::sync::RwLock as TokioRwLock;
 
 use crate::abstractions::{BackendGetObjectsFilter, DawnstoreBackend, RawForeignKeyConstraint};
 use crate::error::DawnStoreError;
 use crate::rbac::constants::{
     KIND_GLOBAL_ROLE, KIND_GLOBAL_ROLE_BINDING, KIND_ROLE, KIND_ROLE_BINDING, KIND_SERVICE_ACCOUNT,
-    SA_SUPERADMIN, SYSTEM_NAMESPACE,
+    KIND_SERVICE_ACCOUNT_TOKEN, SA_SUPERADMIN, SYSTEM_NAMESPACE,
 };
 use crate::rbac::helpers::{object_string_id, schema_cache_key};
 use crate::rbac::middleware::Claims;
@@ -114,18 +116,38 @@ pub struct DawnstoreCache {
     permission: RwLock<PermissionState>,
     /// Maps every registered alias (and canonical kind name) → canonical kind name.
     kind_alias: TokioRwLock<HashMap<String, String>>,
+    /// UUIDs of all currently valid `ServiceAccountToken` objects.
+    /// A JWT whose `token_id` is absent from this set is treated as revoked.
+    valid_token_ids: RwLock<HashSet<Uuid>>,
 }
 
 impl DawnstoreCache {
     // ── Init ──────────────────────────────────────────────────────────────────
 
-    /// Initialise all three caches from `backend` in sequence.
+    /// Initialise all caches from `backend`.
     pub async fn init<B: DawnstoreBackend>(backend: &B) -> Result<Self, DawnStoreError> {
         let cache = Self::default();
         cache.init_schema(backend).await?;
         cache.init_foreign_key(backend).await?;
         cache.init_permission(backend).await?;
+        cache.init_tokens(backend).await?;
         Ok(cache)
+    }
+
+    /// Populate the token-id set from all `ServiceAccountToken` objects in the backend.
+    pub async fn init_tokens<B: DawnstoreBackend>(
+        &self,
+        backend: &B,
+    ) -> Result<(), DawnStoreError> {
+        let tokens = backend
+            .get_objects(&BackendGetObjectsFilter {
+                kind: Some(KIND_SERVICE_ACCOUNT_TOKEN.to_string()),
+                ..Default::default()
+            })
+            .await?;
+        let ids: HashSet<Uuid> = tokens.iter().map(|o| o.id).collect();
+        *self.valid_token_ids.write().unwrap() = ids;
+        Ok(())
     }
 
     /// Populate the schema cache from all schemas returned by `backend`.
@@ -273,6 +295,32 @@ impl DawnstoreCache {
                 state.permissions.remove(&key);
             }
         }
+    }
+
+    // ── Token revocation cache ────────────────────────────────────────────────
+
+    /// Returns `true` if `token_id` is present in the valid-token set.
+    ///
+    /// A JWT whose `token_id` is absent is treated as revoked — the corresponding
+    /// `ServiceAccountToken` object has been deleted from the backend.
+    pub fn is_token_valid(&self, token_id: Uuid) -> bool {
+        self.valid_token_ids.read().unwrap().contains(&token_id)
+    }
+
+    /// Record a newly issued token as valid.
+    ///
+    /// Call this immediately after `upsert_objects` succeeds for a new
+    /// `ServiceAccountToken` so that the JWT can be used without waiting for a
+    /// full cache rebuild.
+    pub fn add_token(&self, token_id: Uuid) {
+        self.valid_token_ids.write().unwrap().insert(token_id);
+    }
+
+    /// Remove a token from the valid set, revoking any JWT derived from it.
+    ///
+    /// Call this after successfully deleting a `ServiceAccountToken` object.
+    pub fn remove_token(&self, token_id: Uuid) {
+        self.valid_token_ids.write().unwrap().remove(&token_id);
     }
 }
 

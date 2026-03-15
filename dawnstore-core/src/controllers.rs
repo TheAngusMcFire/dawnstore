@@ -256,6 +256,7 @@ pub fn unauthorized(message: impl Into<String>) -> Response {
 struct TokenState<B> {
     backend: Arc<B>,
     private_key_pem: Vec<u8>,
+    cache: Arc<DawnstoreCache>,
 }
 
 impl<B> Clone for TokenState<B> {
@@ -263,6 +264,7 @@ impl<B> Clone for TokenState<B> {
         Self {
             backend: Arc::clone(&self.backend),
             private_key_pem: self.private_key_pem.clone(),
+            cache: Arc::clone(&self.cache),
         }
     }
 }
@@ -270,10 +272,11 @@ impl<B> Clone for TokenState<B> {
 pub fn get_rbac_token_routes<B: DawnstoreBackend + 'static>(
     backend: Arc<B>,
     private_key_pem: Vec<u8>,
+    cache: Arc<DawnstoreCache>,
 ) -> Router {
     Router::new()
         .route("/rbac/issue-token", post(issue_token::<B>))
-        .with_state(TokenState { backend, private_key_pem })
+        .with_state(TokenState { backend, private_key_pem, cache })
 }
 
 async fn issue_token<B: DawnstoreBackend + 'static>(
@@ -338,6 +341,10 @@ async fn issue_token<B: DawnstoreBackend + 'static>(
         Ok(t) => t,
         Err(e) => return api_err(crate::error::DawnStoreError::JwtError(e)),
     };
+
+    // Register the new token so it is immediately usable without waiting for a
+    // cache rebuild, and so it can be revoked by deleting the object.
+    state.cache.add_token(token_id);
 
     ok(IssueTokenResponse { token, token_id, expires_at })
 }
