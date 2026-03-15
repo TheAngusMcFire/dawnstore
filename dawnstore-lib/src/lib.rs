@@ -148,7 +148,7 @@ pub struct DeleteObject {
     pub name: String,
 }
 
-#[derive(serde::Deserialize, serde::Serialize)]
+#[derive(serde::Deserialize, serde::Serialize, Debug)]
 pub struct ResourceDefinition {
     pub api_version: String,
     pub kind: String,

@@ -1,5 +1,5 @@
 use crossterm::event::KeyEvent;
-use dawnstore_lib::ReturnObject;
+use dawnstore_lib::{ResourceDefinition, ReturnObject};
 
 /// All events produced by background tasks and forwarded to the main loop.
 #[derive(Debug)]
@@ -12,6 +12,8 @@ pub enum Event {
     ApiObjects(Vec<ReturnObject<serde_json::Value>>),
     /// The API returned a list of namespace names.
     ApiNamespaces(Vec<String>),
+    /// The API returned all resource definitions.
+    ApiResourceDefinitions(Vec<ResourceDefinition>),
     /// An API call succeeded; the string is a human-readable summary.
     ApiSuccess(String),
     /// An API call failed.
@@ -30,6 +32,8 @@ pub enum Command {
     },
     /// Fetch all namespaces (for the namespace switcher).
     RefreshNamespaces,
+    /// Fetch all resource definitions.
+    RefreshResourceDefinitions,
     /// Delete the identified object.
     Delete {
         namespace: String,

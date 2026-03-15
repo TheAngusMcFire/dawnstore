@@ -24,11 +24,18 @@ pub fn update(app: &mut App, event: Event) -> Option<Command> {
             app.ns_selected = app.ns_selected.min(app.namespaces.len().saturating_sub(1));
             None
         }
+        Event::ApiResourceDefinitions(defs) => {
+            debug!(count = defs.len(), "received resource definitions");
+            app.resource_definitions = defs;
+            app.rd_selected = app.rd_selected.min(app.resource_definitions.len().saturating_sub(1));
+            None
+        }
         Event::ApiSuccess(msg) => {
             debug!(msg, "api success");
             app.status = Some(msg);
             app.error = None;
             app.status_ticks = 5;
+            app.suppress_errors_ticks = 0; // let errors show again after a success
             // Auto-refresh so the list reflects the change immediately.
             Some(Command::Refresh {
                 namespace: if app.all_namespaces { None } else { Some(app.namespace.clone()) },
@@ -36,6 +43,10 @@ pub fn update(app: &mut App, event: Event) -> Option<Command> {
             })
         }
         Event::ApiError(err) => {
+            if app.suppress_errors_ticks > 0 {
+                debug!(err, "api error suppressed (user dismissed)");
+                return None;
+            }
             debug!(err, "api error");
             app.error = Some(err);
             app.status = None;
@@ -48,6 +59,9 @@ pub fn update(app: &mut App, event: Event) -> Option<Command> {
 // ── Tick ─────────────────────────────────────────────────────────────────────
 
 fn handle_tick(app: &mut App) -> Option<Command> {
+    if app.suppress_errors_ticks > 0 {
+        app.suppress_errors_ticks -= 1;
+    }
     if app.status_ticks > 0 {
         app.status_ticks -= 1;
         if app.status_ticks == 0 {
@@ -71,6 +85,8 @@ fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) -> Option<Command>
     match app.view.clone() {
         View::ResourceList => handle_resource_list(app, key),
         View::Detail => handle_detail(app, key),
+        View::ResourceDefinitions => handle_resource_definitions(app, key),
+        View::ResourceDefinitionDetail => handle_resource_definition_detail(app, key),
         View::CommandBar => handle_command_bar(app, key),
         View::Confirm => handle_confirm(app, key),
         View::NsSwitcher => handle_ns_switcher(app, key),
@@ -119,8 +135,6 @@ fn handle_resource_list(app: &mut App, key: crossterm::event::KeyEvent) -> Optio
         }
         KeyCode::Char('e') => {
             if app.selected_object().is_some() {
-                app.detail_scroll = 0;
-                app.view = View::Detail;
                 return Some(Command::OpenEditor);
             }
         }
@@ -141,10 +155,23 @@ fn handle_resource_list(app: &mut App, key: crossterm::event::KeyEvent) -> Optio
             app.name_filter.clear();
         }
         KeyCode::Esc => {
-            // Clear filter on Esc when not in filter-typing mode.
             if !app.name_filter.is_empty() {
                 app.name_filter.clear();
                 app.clamp_selection();
+            } else if app.kind_filter.is_some() {
+                app.kind_filter = None;
+                app.selected = 0;
+                return Some(Command::Refresh {
+                    namespace: if app.all_namespaces { None } else { Some(app.namespace.clone()) },
+                    kind: None,
+                });
+            } else if app.error.is_some() || app.status.is_some() {
+                app.error = None;
+                app.status = None;
+                app.status_ticks = 0;
+                // Suppress background refresh errors for 3 ticks (~6 s) so
+                // in-flight and next-tick failures don't immediately re-show.
+                app.suppress_errors_ticks = 3;
             }
         }
         KeyCode::Char('a') => {
@@ -254,6 +281,11 @@ fn execute_command(app: &mut App, input: &str) -> Option<Command> {
     if let Some(path) = input.strip_prefix("apply ") {
         return Some(Command::Apply { path: path.trim().to_string() });
     }
+    if input == "rd" || input == "resourcedefinitions" {
+        app.rd_selected = 0;
+        app.view = View::ResourceDefinitions;
+        return Some(Command::RefreshResourceDefinitions);
+    }
     if input == "all" {
         app.kind_filter = None;
         app.selected = 0;
@@ -264,6 +296,19 @@ fn execute_command(app: &mut App, input: &str) -> Option<Command> {
     }
     // Anything else is treated as a kind filter.
     if !input.is_empty() {
+        // If resource definitions are loaded, validate the kind exists.
+        if !app.resource_definitions.is_empty() {
+            let known = app.resource_definitions.iter().any(|rd| {
+                rd.kind.eq_ignore_ascii_case(input)
+                    || rd.aliases.iter().any(|a| a.eq_ignore_ascii_case(input))
+            });
+            if !known {
+                app.error = Some(format!("unknown kind: {input}"));
+                app.status = None;
+                app.status_ticks = 5;
+                return None;
+            }
+        }
         app.kind_filter = Some(input.to_string());
         app.selected = 0;
         return Some(Command::Refresh {
@@ -340,6 +385,70 @@ fn handle_help(app: &mut App, key: crossterm::event::KeyEvent) -> Option<Command
     match key.code {
         KeyCode::Char('?') | KeyCode::Esc | KeyCode::Char('q') => {
             app.view = View::ResourceList;
+        }
+        _ => {}
+    }
+    None
+}
+
+// ── Resource definitions list ─────────────────────────────────────────────────
+
+fn handle_resource_definitions(app: &mut App, key: crossterm::event::KeyEvent) -> Option<Command> {
+    match key.code {
+        KeyCode::Char('j') | KeyCode::Down => {
+            let max = app.resource_definitions.len().saturating_sub(1);
+            if app.rd_selected < max {
+                app.rd_selected += 1;
+            }
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+            if app.rd_selected > 0 {
+                app.rd_selected -= 1;
+            }
+        }
+        KeyCode::Enter => {
+            if !app.resource_definitions.is_empty() {
+                app.detail_scroll = 0;
+                app.view = View::ResourceDefinitionDetail;
+            }
+        }
+        KeyCode::Char('r') => {
+            return Some(Command::RefreshResourceDefinitions);
+        }
+        KeyCode::Esc | KeyCode::Char('q') => {
+            app.view = View::ResourceList;
+        }
+        _ => {}
+    }
+    None
+}
+
+// ── Resource definition detail ────────────────────────────────────────────────
+
+fn handle_resource_definition_detail(
+    app: &mut App,
+    key: crossterm::event::KeyEvent,
+) -> Option<Command> {
+    match key.code {
+        KeyCode::Char('j') | KeyCode::Down => {
+            app.detail_scroll = app.detail_scroll.saturating_add(1);
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+            app.detail_scroll = app.detail_scroll.saturating_sub(1);
+        }
+        KeyCode::Enter => {
+            // List all objects of this kind across all namespaces.
+            if let Some(rd) = app.resource_definitions.get(app.rd_selected) {
+                let kind = rd.kind.clone();
+                app.kind_filter = Some(kind.clone());
+                app.all_namespaces = true;
+                app.selected = 0;
+                app.view = View::ResourceList;
+                return Some(Command::Refresh { namespace: None, kind: Some(kind) });
+            }
+        }
+        KeyCode::Esc | KeyCode::Char('q') => {
+            app.view = View::ResourceDefinitions;
         }
         _ => {}
     }

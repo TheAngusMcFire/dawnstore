@@ -161,6 +161,11 @@ async fn main() -> Result<()> {
 
     // ── App state ─────────────────────────────────────────────────────────────
     let mut app = app::App::default();
+    app.context_name = std::path::Path::new(&args.context_path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(&args.context_path)
+        .to_string();
 
     // Initial fetch.
     let _ = cmd_tx

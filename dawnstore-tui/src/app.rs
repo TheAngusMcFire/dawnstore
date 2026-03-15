@@ -1,4 +1,4 @@
-use dawnstore_lib::ReturnObject;
+use dawnstore_lib::{ResourceDefinition, ReturnObject};
 
 /// Which view is currently rendered in the main area.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -8,6 +8,10 @@ pub enum View {
     ResourceList,
     /// Full-screen YAML detail for the selected object.
     Detail,
+    /// Scrollable table of resource definitions.
+    ResourceDefinitions,
+    /// Full-screen detail for the selected resource definition (schema + aliases).
+    ResourceDefinitionDetail,
     /// Vim-style `:` command bar overlaid on the resource list.
     CommandBar,
     /// Delete confirmation popup.
@@ -42,7 +46,7 @@ pub struct App {
     pub ns_selected: usize,
     /// Current text in the `:` command bar input.
     pub command_input: String,
-    /// Scroll offset in the detail YAML view.
+    /// Scroll offset in the detail YAML view (objects or resource definitions).
     pub detail_scroll: u16,
     /// Where to return when the confirm popup is dismissed.
     pub confirm_return_view: View,
@@ -52,6 +56,16 @@ pub struct App {
     pub error: Option<String>,
     /// Ticks remaining before status/error is cleared (each tick ≈ 2 s).
     pub status_ticks: u8,
+    /// While > 0, incoming ApiError events are silently dropped so that
+    /// in-flight background refresh results don't override a user-dismissed error.
+    /// Decremented on each tick; never affected by incoming errors.
+    pub suppress_errors_ticks: u8,
+    /// Resource definitions loaded by the `:rd` command.
+    pub resource_definitions: Vec<ResourceDefinition>,
+    /// Index of the highlighted row in the resource definitions list.
+    pub rd_selected: usize,
+    /// Basename of the context file shown in the header.
+    pub context_name: String,
 }
 
 impl Default for App {
@@ -73,6 +87,10 @@ impl Default for App {
             status: None,
             error: None,
             status_ticks: 0,
+            suppress_errors_ticks: 0,
+            resource_definitions: Vec::new(),
+            rd_selected: 0,
+            context_name: String::new(),
         }
     }
 }

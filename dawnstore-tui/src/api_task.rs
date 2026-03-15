@@ -75,6 +75,18 @@ pub async fn run(
                 apply_content(&api, content, &events).await;
             }
 
+            Command::RefreshResourceDefinitions => {
+                match api.get_resource_definitions(&Default::default()).await {
+                    Ok(defs) => {
+                        events.send(Event::ApiResourceDefinitions(defs)).await.ok();
+                    }
+                    Err(e) => {
+                        error!(?e, "resource definition refresh failed");
+                        events.send(Event::ApiError(format!("{e:?}"))).await.ok();
+                    }
+                }
+            }
+
             // Handled by the main loop — should never reach here.
             Command::OpenEditor | Command::Quit => {}
         }
