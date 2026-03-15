@@ -2779,3 +2779,52 @@ async fn delete_namespace_blocked_by_cross_namespace_references(pool: PgPool) ->
 
     Ok(())
 }
+
+/// Deleting a namespace must immediately revoke all JWTs issued for tokens
+/// that lived in that namespace, even though they have not yet expired.
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn delete_namespace_revokes_tokens_in_that_namespace(pool: PgPool) -> sqlx::Result<()> {
+    let server = spawn_rbac_server(pool).await;
+    let sa = &server.bootstrap_token;
+
+    // Create a namespace with a service account and issue a token.
+    let r = http_apply(&server, sa, serde_json::json!([
+        {"api_version": "v1", "kind": "namespace", "namespace": "system", "name": "doomed-ns"},
+        {"api_version": "v1", "kind": "serviceaccount", "namespace": "doomed-ns", "name": "alice"}
+    ])).await;
+    assert!(r["error"].is_null(), "setup must succeed: {r}");
+
+    let alice_jwt = issue_jwt(&server, "doomed-ns", "alice", "alice-token").await;
+
+    // The JWT must be accepted before deletion.
+    let resp = server
+        .api
+        .get_client()
+        .post(format!("{}/get-objects", server.api.get_base_url()))
+        .bearer_auth(&alice_jwt)
+        .json(&serde_json::json!({}))
+        .send()
+        .await
+        .unwrap();
+    assert_ne!(resp.status().as_u16(), 401, "alice JWT must be valid before namespace deletion");
+
+    // Delete the entire namespace.
+    let r = http_delete(&server, sa, serde_json::json!({
+        "namespace": "system", "kind": "namespace", "name": "doomed-ns"
+    })).await;
+    assert!(r["error"].is_null(), "superadmin must be able to delete the namespace: {r}");
+
+    // The same JWT must now be rejected because the token was revoked.
+    let resp = server
+        .api
+        .get_client()
+        .post(format!("{}/get-objects", server.api.get_base_url()))
+        .bearer_auth(&alice_jwt)
+        .json(&serde_json::json!({}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 401, "alice JWT must be rejected after namespace deletion");
+
+    Ok(())
+}

@@ -150,6 +150,20 @@ pub async fn delete<B: DawnstoreBackend>(
                 referencing: cross_refs.join(", "),
             });
         }
+        // Revoke all tokens in the namespace before cascade-deleting them so
+        // that JWTs derived from those tokens are rejected by the middleware
+        // immediately rather than remaining valid until expiry.
+        let tokens = backend
+            .get_objects(&crate::abstractions::BackendGetObjectsFilter {
+                namespace: Some(request.name.clone()),
+                kind: Some(KIND_SERVICE_ACCOUNT_TOKEN.to_string()),
+                ..Default::default()
+            })
+            .await?;
+        for token in &tokens {
+            cache.remove_token(token.id);
+        }
+
         // Delete all objects inside the namespace (relations cascade via FK).
         backend.delete_objects_by_namespace(&request.name).await?;
         // Wipe the permission cache — role bindings in this namespace are gone.
