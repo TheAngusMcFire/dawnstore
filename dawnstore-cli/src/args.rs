@@ -1,4 +1,4 @@
-use clap::{CommandFactory, Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -46,6 +46,17 @@ pub enum CreationKind {
     },
 }
 
+/// All shells supported for completion generation.
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum CompletionShell {
+    Bash,
+    Elvish,
+    Fish,
+    Nushell,
+    PowerShell,
+    Zsh,
+}
+
 #[derive(Subcommand, Debug)]
 pub enum Commands {
     /// Display one or many resources
@@ -61,18 +72,35 @@ pub enum Commands {
     Edit { resource: String, item_name: String },
     /// Apply resource from file
     Apply { path: String },
-    /// Print a nushell completion script to stdout
-    Completions,
+    /// Print a shell completion script to stdout
+    Completions { shell: CompletionShell },
 }
 
 impl Commands {
-    /// Generate and print the nushell completion script.
-    pub fn print_completions() {
-        clap_complete::generate(
-            clap_complete_nushell::Nushell,
-            &mut Cli::command(),
-            "kubectl-lite",
-            &mut std::io::stdout(),
-        );
+    /// Generate and print the completion script for `shell`.
+    pub fn print_completions(shell: CompletionShell) {
+        let cmd = &mut Cli::command();
+        let name = "kubectl-lite";
+        let out = &mut std::io::stdout();
+        match shell {
+            CompletionShell::Nushell => {
+                clap_complete::generate(clap_complete_nushell::Nushell, cmd, name, out)
+            }
+            CompletionShell::Bash => {
+                clap_complete::generate(clap_complete::Shell::Bash, cmd, name, out)
+            }
+            CompletionShell::Elvish => {
+                clap_complete::generate(clap_complete::Shell::Elvish, cmd, name, out)
+            }
+            CompletionShell::Fish => {
+                clap_complete::generate(clap_complete::Shell::Fish, cmd, name, out)
+            }
+            CompletionShell::PowerShell => {
+                clap_complete::generate(clap_complete::Shell::PowerShell, cmd, name, out)
+            }
+            CompletionShell::Zsh => {
+                clap_complete::generate(clap_complete::Shell::Zsh, cmd, name, out)
+            }
+        }
     }
 }

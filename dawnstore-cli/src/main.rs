@@ -20,8 +20,13 @@ fn api_err(e: impl std::fmt::Debug) -> color_eyre::eyre::Error {
 #[tokio::main]
 async fn main() -> color_eyre::Result<()> {
     // Handle `completions` before full parsing so --context-path isn't required.
-    if std::env::args().any(|a| a == "completions") {
-        args::Commands::print_completions();
+    // We need to find both "completions" and the shell argument that follows it.
+    if let Some(shell) = std::env::args()
+        .skip_while(|a| a != "completions")
+        .nth(1)
+        .and_then(|s| clap::ValueEnum::from_str(&s, true).ok())
+    {
+        args::Commands::print_completions(shell);
         return Ok(());
     }
 
@@ -226,7 +231,7 @@ async fn main() -> color_eyre::Result<()> {
                 .iter()
                 .for_each(|x| println!("{}", x.name));
         }
-        args::Commands::Completions => unreachable!("handled before api setup"),
+        args::Commands::Completions { .. } => unreachable!("handled before api setup"),
     }
     Ok(())
 }
