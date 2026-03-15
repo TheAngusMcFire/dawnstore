@@ -312,6 +312,99 @@ async fn get_objects_by_alias(pool: PgPool) -> sqlx::Result<()> {
     Ok(())
 }
 
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn aliases_resolve_independently_for_multiple_kinds(pool: PgPool) -> sqlx::Result<()> {
+    // Seed two kinds each with their own alias so we can verify alias resolution
+    // works correctly when multiple kinds share the same server.
+    use dawnstore_testing::EmptyObject;
+
+    let backend = PostgresBackend::new(pool);
+    backend
+        .seed_object_schema::<Container>(
+            "v1",
+            "container",
+            ["containers", "c"],
+            [ForeignKey::new(
+                "parent",
+                Some("children"),
+                ForeignKeyType::OneOptional,
+                Some("container"),
+            )],
+        )
+        .await
+        .unwrap();
+    backend
+        .seed_object_schema::<EmptyObject>("v1", "widget", ["widgets", "w"], [])
+        .await
+        .unwrap();
+
+    let backend = Arc::new(backend);
+    let cache = Arc::new(DawnstoreCache::init(&*backend).await.unwrap());
+    let app = get_dawnstore_routes(backend, cache, vec![]);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let api = Api::new(base_url);
+
+    api.apply_str(container("box-a", 1)).await.unwrap();
+    api.apply_str(
+        serde_json::to_string(&serde_json::json!({
+            "api_version": "v1",
+            "kind": "widget",
+            "name": "gadget-1",
+        }))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+
+    // Both canonical aliases ("c" and "w") resolve to the correct kind.
+    let containers = api
+        .get_objects(&GetObjectsFilter {
+            kind: Some("c".into()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let widgets = api
+        .get_objects(&GetObjectsFilter {
+            kind: Some("w".into()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(containers.len(), 1);
+    assert_eq!(containers[0].kind, "container");
+    assert_eq!(containers[0].name, "box-a");
+
+    assert_eq!(widgets.len(), 1);
+    assert_eq!(widgets[0].kind, "widget");
+    assert_eq!(widgets[0].name, "gadget-1");
+
+    // Alias for one kind must not match objects of another kind.
+    let containers_via_long = api
+        .get_objects(&GetObjectsFilter {
+            kind: Some("containers".into()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let widgets_via_long = api
+        .get_objects(&GetObjectsFilter {
+            kind: Some("widgets".into()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(containers_via_long.len(), 1);
+    assert_eq!(widgets_via_long.len(), 1);
+    assert_ne!(containers_via_long[0].id, widgets_via_long[0].id);
+
+    Ok(())
+}
+
 // ── Controller rules ─────────────────────────────────────────────────────────
 
 #[sqlx::test(migrator = "MIGRATOR")]

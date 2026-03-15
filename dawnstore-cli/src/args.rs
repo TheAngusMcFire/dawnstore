@@ -27,9 +27,22 @@ pub struct Cli {
 }
 #[derive(Subcommand, Debug)]
 pub enum CreationKind {
+    /// Issue a JWT for a service account
     Token {
         token_name: String,
         service_account: String,
+    },
+    /// Create a namespace (always stored in the system namespace)
+    #[command(name = "namespace", alias = "ns")]
+    Namespace {
+        /// Name of the namespace to create
+        name: String,
+    },
+    /// Create a service account in the current namespace
+    #[command(name = "serviceaccount", alias = "sa")]
+    ServiceAccount {
+        /// Name of the service account to create
+        name: String,
     },
 }
 

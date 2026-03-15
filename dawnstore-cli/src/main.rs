@@ -49,6 +49,43 @@ async fn main() -> color_eyre::Result<()> {
                 .await?;
             println!("{}", token.token);
         }
+        args::Commands::Create {
+            resource_kind: args::CreationKind::Namespace { name },
+        } => {
+            // Namespaces must always be created inside "system".
+            let obj = dawnstore_client_lib::Object {
+                namespace: Some("system".to_string()),
+                api_version: Some("v1".to_string()),
+                kind: Some("namespace".to_string()),
+                name: name.clone(),
+                spec: serde_json::Value::Object(Default::default()),
+                id: None,
+                created_at: None,
+                updated_at: None,
+                annotations: None,
+                labels: None,
+            };
+            api.apply(&obj).await.map_err(api_err)?;
+            println!("namespace/{name} created");
+        }
+        args::Commands::Create {
+            resource_kind: args::CreationKind::ServiceAccount { name },
+        } => {
+            let obj = dawnstore_client_lib::Object {
+                namespace: Some(ns.to_string()),
+                api_version: Some("v1".to_string()),
+                kind: Some("serviceaccount".to_string()),
+                name: name.clone(),
+                spec: serde_json::Value::Object(Default::default()),
+                id: None,
+                created_at: None,
+                updated_at: None,
+                annotations: None,
+                labels: None,
+            };
+            api.apply(&obj).await.map_err(api_err)?;
+            println!("serviceaccount/{name} created");
+        }
         args::Commands::Get { resource }
             if resource == "resource-definitions" || resource == "rd" =>
         {

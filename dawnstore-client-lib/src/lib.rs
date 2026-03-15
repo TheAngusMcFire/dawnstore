@@ -118,6 +118,18 @@ impl Api {
         envelope(resp).await
     }
 
+    pub async fn apply<T: Serialize>(
+        &self,
+        obj: &Object<T>,
+    ) -> Result<Vec<ReturnObject<serde_json::Value>>, DawnstoreApiError> {
+        let resp = self
+            .request(Method::POST, format!("{}/apply", self.base_url))
+            .json(obj)
+            .send()
+            .await?;
+        envelope(resp).await
+    }
+
     pub async fn apply_str(
         &self,
         content: String,
