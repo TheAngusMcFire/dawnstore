@@ -78,6 +78,13 @@ fn to_api_error(err: DawnStoreError) -> DawnStoreApiError {
         DawnStoreError::ForeignKeyNotFound(value) => {
             DawnStoreApiError::ForeignKeyNotFound { value }
         }
+        DawnStoreError::InvalidObjectName(name) => DawnStoreApiError::ValidationError {
+            name,
+            message: "object name must not contain '/'".to_string(),
+        },
+        DawnStoreError::InvalidObjectNamespace(ns) => DawnStoreApiError::InvalidInput {
+            message: format!("object namespace '{ns}' must not contain '/'"),
+        },
         DawnStoreError::InvalidRootInputObject
         | DawnStoreError::InvalidInputObjectMissingKindField
         | DawnStoreError::InvalidInputObjectMissingListFieldOfList
@@ -270,6 +277,18 @@ async fn issue_token<B: DawnstoreBackend + 'static>(
 ) -> Response {
     if !is_superadmin(&claims) {
         return (StatusCode::FORBIDDEN, "only superadmin may issue tokens").into_response();
+    }
+
+    // Reject names/namespaces containing '/' — these bypass the normal apply
+    // path and would create ambiguous string IDs.
+    if req.token_name.contains('/') {
+        return api_err(DawnStoreError::InvalidObjectName(req.token_name.clone()));
+    }
+    if req.namespace.contains('/') {
+        return api_err(DawnStoreError::InvalidObjectNamespace(req.namespace.clone()));
+    }
+    if req.service_account.contains('/') {
+        return api_err(DawnStoreError::InvalidObjectName(req.service_account.clone()));
     }
 
     let expires_at = req

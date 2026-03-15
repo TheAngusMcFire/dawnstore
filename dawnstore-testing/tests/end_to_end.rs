@@ -893,6 +893,94 @@ async fn issue_token_rejects_nonexistent_service_account(pool: PgPool) -> sqlx::
     Ok(())
 }
 
+/// Object names containing '/' must be rejected to avoid ambiguous string IDs.
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn apply_rejects_name_with_slash(pool: PgPool) -> sqlx::Result<()> {
+    let server = spawn_rbac_server(pool).await;
+
+    let resp = http_apply(&server, &server.bootstrap_token, serde_json::json!({
+        "apiVersion": "v1",
+        "kind": "Namespace",
+        "namespace": "system",
+        "name": "bad/name"
+    })).await;
+
+    assert!(!resp["error"].is_null(), "expected error for name with '/': {resp}");
+
+    Ok(())
+}
+
+/// Object namespaces containing '/' must be rejected to avoid ambiguous string IDs.
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn apply_rejects_namespace_with_slash(pool: PgPool) -> sqlx::Result<()> {
+    let server = spawn_rbac_server(pool).await;
+
+    let resp = http_apply(&server, &server.bootstrap_token, serde_json::json!({
+        "apiVersion": "v1",
+        "kind": "Namespace",
+        "namespace": "bad/ns",
+        "name": "my-ns"
+    })).await;
+
+    assert!(!resp["error"].is_null(), "expected error for namespace with '/': {resp}");
+
+    Ok(())
+}
+
+/// `issue_token` must also reject token names / SA names / namespaces with '/'.
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn issue_token_rejects_slash_in_name(pool: PgPool) -> sqlx::Result<()> {
+    let server = spawn_rbac_server(pool).await;
+
+    // First create a valid SA to be sure the rejection isn't hitting the SA check.
+    let sa_resp = http_apply(&server, &server.bootstrap_token, serde_json::json!({
+        "apiVersion": "v1",
+        "kind": "ServiceAccount",
+        "namespace": "system",
+        "name": "valid-sa",
+        "spec": {}
+    })).await;
+    assert!(sa_resp["error"].is_null(), "SA creation must succeed: {sa_resp}");
+
+    // Token name with slash.
+    let resp = server
+        .api
+        .get_client()
+        .post(format!("{}/rbac/issue-token", server.api.get_base_url()))
+        .bearer_auth(&server.bootstrap_token)
+        .json(&serde_json::json!({
+            "namespace": "system",
+            "service_account": "valid-sa",
+            "token_name": "bad/token"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(resp.status().is_success());
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(!body["error"].is_null(), "expected error for token name with '/': {body}");
+
+    // Namespace with slash.
+    let resp2 = server
+        .api
+        .get_client()
+        .post(format!("{}/rbac/issue-token", server.api.get_base_url()))
+        .bearer_auth(&server.bootstrap_token)
+        .json(&serde_json::json!({
+            "namespace": "bad/ns",
+            "service_account": "valid-sa",
+            "token_name": "ok-token"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(resp2.status().is_success());
+    let body2: serde_json::Value = resp2.json().await.unwrap();
+    assert!(!body2["error"].is_null(), "expected error for namespace with '/': {body2}");
+
+    Ok(())
+}
+
 // ── JWT authentication negative cases ────────────────────────────────────────
 
 /// Helper: POST to any protected endpoint with the given raw Authorization value.

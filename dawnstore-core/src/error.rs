@@ -86,4 +86,8 @@ pub enum DawnStoreError {
     Forbidden,
     #[error("Cannot delete object '{target}': still referenced by: {referencing}")]
     DeleteBlockedByReferences { target: String, referencing: String },
+    #[error("Object name '{0}' contains '/'; use '-' or another separator instead")]
+    InvalidObjectName(String),
+    #[error("Object namespace '{0}' contains '/'; namespaces must not contain '/'")]
+    InvalidObjectNamespace(String),
 }

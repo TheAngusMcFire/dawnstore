@@ -758,7 +758,20 @@ pub async fn apply<B: DawnstoreBackend>(
     let (parent_objects, nav_objects) = extract_navigation_properties(raw_objects);
     let objects: Vec<ObjectAny> = nav_objects.into_iter().chain(parent_objects).collect();
 
-    // Step 3: enforce the namespace restriction on the full assembled batch,
+    // Step 3: reject any object whose name or namespace contains '/'.
+    // A '/' in either field creates ambiguous string IDs (namespace/kind/name)
+    // and breaks all FK shorthand formats that rely on splitting on '/'.
+    for obj in &objects {
+        if obj.name.contains('/') {
+            return Err(DawnStoreError::InvalidObjectName(obj.name.clone()));
+        }
+        let ns = obj.namespace.as_deref().unwrap_or("default");
+        if ns.contains('/') {
+            return Err(DawnStoreError::InvalidObjectNamespace(ns.to_string()));
+        }
+    }
+
+    // Step 4: enforce the namespace restriction on the full assembled batch,
     // including any objects that arrived via nav-prop embedding. `Namespace`
     // objects may only be created inside the `system` namespace; any attempt
     // to create one elsewhere — including through an embedded nav-prop that
@@ -781,18 +794,18 @@ pub async fn apply<B: DawnstoreBackend>(
         let api_version =
             obj.api_version.as_deref().ok_or(DawnStoreError::ApiVersionMissingInObject)?;
 
-        // Step 4: permission check (Apply) — fail fast before any heavier work.
+        // Step 5: permission check (Apply) — fail fast before any heavier work.
         check_permission(cache, backend, caller, Verb::Apply, namespace, kind, &obj.name).await?;
 
-        // Step 5: schema validation against the cached JSON schema validator.
+        // Step 6: schema validation against the cached JSON schema validator.
         validate_schema(cache, api_version, kind, &obj.name, &obj.spec).await?;
     }
 
-    // Step 6: privilege-escalation check — reject if any RBAC object in the batch
+    // Step 7: privilege-escalation check — reject if any RBAC object in the batch
     // would grant permissions the caller does not themselves hold.
     check_rbac_escalation(backend, cache, caller, &objects).await?;
 
-    // Steps 7 + 8: iterative FK graph walk — resolves, existence-checks, and
+    // Steps 8 + 9: iterative FK graph walk — resolves, existence-checks, and
     // Get-permission-checks every FK target to arbitrary nesting depth.
     let relations = walk_foreign_key_graph(backend, cache, caller, &objects).await?;
 
