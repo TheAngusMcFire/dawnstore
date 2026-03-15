@@ -70,12 +70,32 @@ impl SchemaDefinition {
         foreign_keys: impl IntoIterator<Item = ForeignKey>,
     ) -> Self {
         let schema = schemars::schema_for!(T);
+        // Serialise to Value so we can inject fields from Object<T> that are
+        // valid top-level fields in any apply/get request but live on the wrapper
+        // type rather than the spec struct.  We use `entry(...).or_insert` so we
+        // don't overwrite a field that the spec struct already declares itself.
+        let mut schema_value = serde_json::to_value(&schema).unwrap();
+        let nullable_string_map = serde_json::json!({
+            "type": ["object", "null"],
+            "additionalProperties": { "type": "string" }
+        });
+        if let Some(props) = schema_value
+            .get_mut("properties")
+            .and_then(|p| p.as_object_mut())
+        {
+            props
+                .entry("labels")
+                .or_insert_with(|| nullable_string_map.clone());
+            props
+                .entry("annotations")
+                .or_insert_with(|| nullable_string_map);
+        }
         Self {
             api_version: api_version.into(),
             kind: kind.into(),
             aliases: aliases.into_iter().map(|x| x.into()).collect(),
             foreign_keys: foreign_keys.into_iter().collect(),
-            json_schema: serde_json::to_string(&schema).unwrap(),
+            json_schema: serde_json::to_string(&schema_value).unwrap(),
         }
     }
 }

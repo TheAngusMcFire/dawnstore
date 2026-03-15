@@ -1,0 +1,463 @@
+# platform.yaml — end-to-end example for the dawnstore platform domain.
+#
+# Demonstrates:
+#   • Namespaces (must live in "system")
+#   • Service accounts + roles + role bindings (namespaced and global)
+#   • Custom kinds: team, project, environment, secret, deployment
+#   • One-to-one FKs  (project → team, environment → project, …)
+#   • One-to-many FKs (deployment.secrets → [secret, secret, …])
+#   • Kind aliases     (pj, env, sec, dp, tm)
+#
+# Apply with:
+#   DAWNSTORE_CONTEXT=./context.yml dawnstore-cli apply examples/platform.yaml
+
+# ── Namespaces ────────────────────────────────────────────────────────────────
+# Namespace objects must be created inside the "system" namespace.
+
+- api_version: v1
+  kind: namespace
+  namespace: system
+  name: platform        # holds all domain objects (teams, projects, …)
+
+- api_version: v1
+  kind: namespace
+  namespace: system
+  name: ops             # holds service accounts and RBAC objects
+
+# ── Teams ─────────────────────────────────────────────────────────────────────
+# Teams are the root of the FK graph — no dependencies on other custom kinds.
+# Alias: tm
+
+- api_version: v1
+  kind: team
+  namespace: platform
+  name: backend
+  description: "Core API and data services"
+  tags: [backend, on-call]
+
+- api_version: v1
+  kind: team
+  namespace: platform
+  name: frontend
+  description: "Web and mobile clients"
+  tags: [frontend]
+
+- api_version: v1
+  kind: team
+  namespace: platform
+  name: data
+  description: "Data engineering and pipelines"
+  tags: [backend, data, on-call]
+
+# ── Projects ──────────────────────────────────────────────────────────────────
+# Each project belongs to exactly one team (FK: project.team → team).
+# Alias: pj, proj
+
+- api_version: v1
+  kind: project
+  namespace: platform
+  name: api-server
+  description: "REST API backing the web app"
+  status: Active
+  team: backend         # short FK: resolves to platform/team/backend
+
+- api_version: v1
+  kind: project
+  namespace: platform
+  name: web-app
+  description: "React frontend"
+  status: Active
+  team: frontend
+
+- api_version: v1
+  kind: project
+  namespace: platform
+  name: data-pipeline
+  description: "Nightly ETL jobs"
+  status: Active
+  team: data
+
+- api_version: v1
+  kind: project
+  namespace: platform
+  name: legacy-monolith
+  description: "Being phased out"
+  status: Archived
+  team: backend
+
+# ── Environments ──────────────────────────────────────────────────────────────
+# Each environment belongs to one project (FK: environment.project → project).
+# Alias: env, envs
+
+- api_version: v1
+  kind: environment
+  namespace: platform
+  name: api-dev
+  env_type: Development
+  project: api-server
+
+- api_version: v1
+  kind: environment
+  namespace: platform
+  name: api-staging
+  env_type: Staging
+  project: api-server
+
+- api_version: v1
+  kind: environment
+  namespace: platform
+  name: api-prod
+  env_type: Production
+  project: api-server
+
+- api_version: v1
+  kind: environment
+  namespace: platform
+  name: web-dev
+  env_type: Development
+  project: web-app
+
+- api_version: v1
+  kind: environment
+  namespace: platform
+  name: web-prod
+  env_type: Production
+  project: web-app
+
+- api_version: v1
+  kind: environment
+  namespace: platform
+  name: pipeline-prod
+  env_type: Production
+  project: data-pipeline
+
+# ── Secrets ───────────────────────────────────────────────────────────────────
+# A secret slot records *that* a secret is needed — not its value.
+# FK: secret.environment → environment.
+# Alias: sec
+
+- api_version: v1
+  kind: secret
+  namespace: platform
+  name: api-dev-db-url
+  key: DATABASE_URL
+  description: "Postgres connection string for dev"
+  environment: api-dev
+
+- api_version: v1
+  kind: secret
+  namespace: platform
+  name: api-dev-jwt-secret
+  key: JWT_SECRET
+  environment: api-dev
+
+- api_version: v1
+  kind: secret
+  namespace: platform
+  name: api-staging-db-url
+  key: DATABASE_URL
+  environment: api-staging
+
+- api_version: v1
+  kind: secret
+  namespace: platform
+  name: api-staging-jwt-secret
+  key: JWT_SECRET
+  environment: api-staging
+
+- api_version: v1
+  kind: secret
+  namespace: platform
+  name: api-prod-db-url
+  key: DATABASE_URL
+  description: "Production Postgres — managed by Vault"
+  environment: api-prod
+
+- api_version: v1
+  kind: secret
+  namespace: platform
+  name: api-prod-jwt-secret
+  key: JWT_SECRET
+  environment: api-prod
+
+- api_version: v1
+  kind: secret
+  namespace: platform
+  name: web-dev-api-url
+  key: API_BASE_URL
+  environment: web-dev
+
+- api_version: v1
+  kind: secret
+  namespace: platform
+  name: web-prod-api-url
+  key: API_BASE_URL
+  environment: web-prod
+
+- api_version: v1
+  kind: secret
+  namespace: platform
+  name: pipeline-prod-warehouse-url
+  key: WAREHOUSE_URL
+  description: "BigQuery connection for the ETL pipeline"
+  environment: pipeline-prod
+
+# ── Deployments ───────────────────────────────────────────────────────────────
+# A deployment links a project version to an environment and declares which
+# secrets it needs at runtime (NoneOrMany FK: deployment.secrets → [secret…]).
+# Alias: dp, deploy
+
+- api_version: v1
+  kind: deployment
+  namespace: platform
+  name: api-dev-v1.2.0
+  image: registry.example.com/api-server:1.2.0
+  version: 1.2.0
+  project: api-server
+  environment: api-dev
+  secrets:
+    - api-dev-db-url        # short FK: resolves to platform/secret/api-dev-db-url
+    - api-dev-jwt-secret
+
+- api_version: v1
+  kind: deployment
+  namespace: platform
+  name: api-staging-v1.1.5
+  image: registry.example.com/api-server:1.1.5
+  version: 1.1.5
+  project: api-server
+  environment: api-staging
+  secrets:
+    - api-staging-db-url
+    - api-staging-jwt-secret
+
+- api_version: v1
+  kind: deployment
+  namespace: platform
+  name: api-prod-v1.1.0
+  image: registry.example.com/api-server:1.1.0
+  version: 1.1.0
+  project: api-server
+  environment: api-prod
+  secrets:
+    - api-prod-db-url
+    - api-prod-jwt-secret
+
+- api_version: v1
+  kind: deployment
+  namespace: platform
+  name: web-dev-v3.0.0-beta
+  image: registry.example.com/web-app:3.0.0-beta
+  version: 3.0.0-beta
+  project: web-app
+  environment: web-dev
+  secrets:
+    - web-dev-api-url
+
+- api_version: v1
+  kind: deployment
+  namespace: platform
+  name: web-prod-v2.9.1
+  image: registry.example.com/web-app:2.9.1
+  version: 2.9.1
+  project: web-app
+  environment: web-prod
+  secrets:
+    - web-prod-api-url
+
+- api_version: v1
+  kind: deployment
+  namespace: platform
+  name: pipeline-prod-v0.4.2
+  image: registry.example.com/data-pipeline:0.4.2
+  version: 0.4.2
+  project: data-pipeline
+  environment: pipeline-prod
+  secrets:
+    - pipeline-prod-warehouse-url
+
+# ── Service accounts ──────────────────────────────────────────────────────────
+# Four principals with different levels of access to the platform namespace.
+
+- api_version: v1
+  kind: serviceaccount
+  namespace: ops
+  name: platform-admin   # full access: get + apply + delete everything in platform
+
+- api_version: v1
+  kind: serviceaccount
+  namespace: ops
+  name: developer        # can read everything, create/update deployments
+
+- api_version: v1
+  kind: serviceaccount
+  namespace: ops
+  name: ci-runner        # can apply deployments only (for CD pipelines)
+
+- api_version: v1
+  kind: serviceaccount
+  namespace: ops
+  name: auditor          # read-only access to everything
+
+# ── Roles ─────────────────────────────────────────────────────────────────────
+# Roles are namespaced to "ops" and scoped to the kinds they govern.
+# They must be in the same namespace as their RoleBinding.
+
+- api_version: v1
+  kind: role
+  namespace: ops
+  name: platform-admin
+  rules:
+    - api_version: "*"
+      kinds: ["*"]
+      verbs: [get, apply, delete]
+
+- api_version: v1
+  kind: role
+  namespace: ops
+  name: developer
+  rules:
+    # Read access to all domain objects.
+    - api_version: v1
+      kinds: [team, project, environment, secret, deployment]
+      verbs: [get]
+    # Write access only to deployments (developers ship code, not infra).
+    - api_version: v1
+      kinds: [deployment]
+      verbs: [apply]
+
+- api_version: v1
+  kind: role
+  namespace: ops
+  name: ci-runner
+  rules:
+    # CI/CD pipeline: read environments/secrets (to know what exists),
+    # apply deployments (to publish new versions).
+    - api_version: v1
+      kinds: [environment, secret, deployment]
+      verbs: [get]
+    - api_version: v1
+      kinds: [deployment]
+      verbs: [apply]
+
+- api_version: v1
+  kind: role
+  namespace: ops
+  name: auditor
+  rules:
+    - api_version: v1
+      kinds: [team, project, environment, secret, deployment]
+      verbs: [get]
+
+# ── Role bindings ─────────────────────────────────────────────────────────────
+# Each binding grants a role to one or more subjects within the "ops" namespace.
+# Because these are RoleBindings (not GlobalRoleBindings), the grants are
+# scoped to the "ops" namespace only — cross-namespace access (e.g. to "platform")
+# would require a GlobalRoleBinding.
+
+- api_version: v1
+  kind: rolebinding
+  namespace: ops
+  name: platform-admin-binding
+  role: role/platform-admin
+  subjects:
+    - serviceaccount/platform-admin
+
+- api_version: v1
+  kind: rolebinding
+  namespace: ops
+  name: developer-binding
+  role: role/developer
+  subjects:
+    - serviceaccount/developer
+
+- api_version: v1
+  kind: rolebinding
+  namespace: ops
+  name: ci-runner-binding
+  role: role/ci-runner
+  subjects:
+    - serviceaccount/ci-runner
+
+- api_version: v1
+  kind: rolebinding
+  namespace: ops
+  name: auditor-binding
+  role: role/auditor
+  subjects:
+    - serviceaccount/auditor
+
+# ── Global role binding — cross-namespace read ────────────────────────────────
+# A GlobalRoleBinding lets "ops" service accounts read objects in ALL namespaces,
+# including "platform". Without this the developer/auditor SAs would see nothing
+# in the platform namespace despite their RoleBinding above.
+#
+# We create a single GlobalRole that grants read access to all custom kinds,
+# then bind each SA that needs cross-namespace visibility.
+
+- api_version: v1
+  kind: globalrole
+  namespace: system
+  name: cross-namespace-viewer
+  rules:
+    - api_version: v1
+      kinds: [team, project, environment, secret, deployment]
+      verbs: [get]
+
+- api_version: v1
+  kind: globalrolebinding
+  namespace: system
+  name: ops-cross-namespace-viewer
+  role: globalrole/cross-namespace-viewer
+  subjects:
+    - ops/serviceaccount/platform-admin
+    - ops/serviceaccount/developer
+    - ops/serviceaccount/ci-runner
+    - ops/serviceaccount/auditor
+
+# ── Single-object access ──────────────────────────────────────────────────────
+# "hotfix-bot" may only read and update one specific deployment.
+# It cannot list other deployments, touch any other kind, or delete anything.
+# The `names` restriction on the rule locks access to exactly one object.
+
+- api_version: v1
+  kind: serviceaccount
+  namespace: ops
+  name: hotfix-bot
+
+- api_version: v1
+  kind: role
+  namespace: ops
+  name: single-deployment-editor
+  rules:
+    - api_version: v1
+      kinds: [deployment]
+      verbs: [get, apply]
+      names: [api-prod-v1.1.0]   # locked to this one object name only
+
+- api_version: v1
+  kind: rolebinding
+  namespace: ops
+  name: hotfix-bot-binding
+  role: role/single-deployment-editor
+  subjects:
+    - serviceaccount/hotfix-bot
+
+# Cross-namespace: hotfix-bot also needs to read the deployment in "platform".
+- api_version: v1
+  kind: globalrole
+  namespace: system
+  name: single-deployment-viewer
+  rules:
+    - api_version: v1
+      kinds: [deployment]
+      verbs: [get, apply]
+      names: [api-prod-v1.1.0]
+
+- api_version: v1
+  kind: globalrolebinding
+  namespace: system
+  name: hotfix-bot-global-binding
+  role: globalrole/single-deployment-viewer
+  subjects:
+    - ops/serviceaccount/hotfix-bot

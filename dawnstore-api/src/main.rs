@@ -2,14 +2,14 @@ use std::sync::Arc;
 
 use base64::prelude::*;
 use color_eyre::eyre;
-use dawnstore_core::abstractions::{ForeignKey, ForeignKeyType};
+use dawnstore_core::abstractions::{ForeignKey, ForeignKeyBehaviour, ForeignKeyType};
 use dawnstore_core::cache::DawnstoreCache;
 use dawnstore_core::controllers::get_dawnstore_routes;
 use dawnstore_postgres::PostgresBackend;
 use tokio::net::TcpListener;
 
 mod models;
-use models::Container;
+use models::{Container, Deployment, Environment, Project, Secret, Team};
 
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
@@ -34,6 +34,12 @@ async fn main() -> eyre::Result<()> {
 
     backend.sqlx_migrate().await?;
 
+    // ── Schema registration ───────────────────────────────────────────────────
+    //
+    // Schemas must be registered before objects of that kind can be applied.
+    // Register root kinds first so FK targets exist before FK sources.
+
+    // Original demo model — a self-referencing container tree.
     backend
         .seed_object_schema::<Container>(
             "v2",
@@ -45,6 +51,85 @@ async fn main() -> eyre::Result<()> {
                 ForeignKeyType::OneOptional,
                 Some("container"),
             )],
+        )
+        .await?;
+
+    // Team — root node, no FKs.
+    backend
+        .seed_object_schema::<Team>("v1", "team", ["teams", "tm"], [])
+        .await?;
+
+    // Project — belongs to one Team.
+    backend
+        .seed_object_schema::<Project>(
+            "v1",
+            "project",
+            ["projects", "pj", "proj"],
+            [ForeignKey::new(
+                "team",
+                None::<&str>,
+                ForeignKeyType::One,
+                Some("team"),
+            )],
+        )
+        .await?;
+
+    // Environment — belongs to one Project.
+    backend
+        .seed_object_schema::<Environment>(
+            "v1",
+            "environment",
+            ["env", "environments", "envs"],
+            [ForeignKey::new(
+                "project",
+                None::<&str>,
+                ForeignKeyType::One,
+                Some("project"),
+            )],
+        )
+        .await?;
+
+    // Secret — belongs to one Environment.
+    backend
+        .seed_object_schema::<Secret>(
+            "v1",
+            "secret",
+            ["secrets", "sec"],
+            [ForeignKey::new(
+                "environment",
+                None::<&str>,
+                ForeignKeyType::One,
+                Some("environment"),
+            )],
+        )
+        .await?;
+
+    // Deployment — references Project (One), Environment (One), and
+    // zero-or-more Secrets (NoneOrMany). The secrets FK uses ForeignKeyBehaviour::Ignore
+    // so that the FK walk does not block a deployment from being created before
+    // its secrets exist — the array is informational ("this deployment needs these
+    // secrets") rather than a hard existence constraint.
+    backend
+        .seed_object_schema::<Deployment>(
+            "v1",
+            "deployment",
+            ["deployments", "dp", "deploy"],
+            [
+                ForeignKey::new("project", None::<&str>, ForeignKeyType::One, Some("project")),
+                ForeignKey::new(
+                    "environment",
+                    None::<&str>,
+                    ForeignKeyType::One,
+                    Some("environment"),
+                ),
+                ForeignKey {
+                    path: "secrets".into(),
+                    parent_path: None,
+                    ty: ForeignKeyType::NoneOrMany,
+                    behaviour: ForeignKeyBehaviour::Fill,
+                    foreign_kind: Some("secret".into()),
+                },
+            ],
         )
         .await?;
 
@@ -63,11 +148,7 @@ async fn main() -> eyre::Result<()> {
 
     let routes = get_dawnstore_routes(Arc::clone(&backend), Arc::clone(&cache), private_key_pem);
 
-    let app = dawnstore_core::rbac::with_jwt_auth(
-        routes,
-        public_key_pem,
-        Arc::clone(&cache),
-    );
+    let app = dawnstore_core::rbac::with_jwt_auth(routes, public_key_pem, Arc::clone(&cache));
 
     let listener = TcpListener::bind("::0:8080").await.unwrap();
     tracing::info!("listening on {}", listener.local_addr().unwrap());
