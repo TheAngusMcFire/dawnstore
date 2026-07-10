@@ -23,6 +23,7 @@ mod tests {
     fn delete_request(namespace: &str, kind: &str, name: &str) -> DeleteObject {
         DeleteObject {
             namespace: Some(namespace.to_string()),
+            api_version: None,
             kind: kind.to_string(),
             name: name.to_string(),
         }
@@ -91,6 +92,7 @@ mod tests {
             None,
             DeleteObject {
                 namespace: Some("default".to_string()),
+                api_version: None,
                 kind: "cars".to_string(),
                 name: "car1".to_string(),
             },
@@ -116,6 +118,8 @@ mod tests {
             token_name: "bootstrap".to_string(),
             token_id: Uuid::new_v4(),
             exp: u64::MAX,
+            iss: "dawnstore".to_string(),
+            aud: "dawnstore".to_string(),
         };
 
         let result =

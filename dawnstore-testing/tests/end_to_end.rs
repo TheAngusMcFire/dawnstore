@@ -52,7 +52,12 @@ async fn spawn_server(pool: PgPool) -> Api {
 
     let backend = Arc::new(backend);
     let cache = Arc::new(DawnstoreCache::init(&*backend).await.unwrap());
-    let app = get_dawnstore_routes(backend, cache, vec![]);
+    // The handlers require an authenticated identity (`Extension<Claims>`). This
+    // harness has no JWT middleware, so inject a superadmin claim to run tests as
+    // the built-in superadmin — mirroring the production posture where the auth
+    // layer always supplies claims.
+    let app = get_dawnstore_routes(backend, cache, vec![])
+        .layer(axum::middleware::from_fn(inject_superadmin));
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base_url = format!("http://{}", listener.local_addr().unwrap());
 
@@ -61,6 +66,25 @@ async fn spawn_server(pool: PgPool) -> Api {
     });
 
     Api::new(base_url)
+}
+
+/// Test-only middleware that injects the built-in superadmin identity so the
+/// `spawn_server` harness (which has no JWT layer) can call handlers that now
+/// require `Extension<Claims>`.
+async fn inject_superadmin(
+    mut req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    req.extensions_mut().insert(dawnstore_core::rbac::middleware::Claims {
+        sub: "superadmin".into(),
+        namespace: "system".into(),
+        token_name: "test".into(),
+        token_id: uuid::Uuid::nil(),
+        exp: u64::MAX,
+        iss: "dawnstore".into(),
+        aud: "dawnstore".into(),
+    });
+    next.run(req).await
 }
 
 fn container(name: &str, nr: u32) -> String {
@@ -256,6 +280,7 @@ async fn delete_removes_object(pool: PgPool) -> sqlx::Result<()> {
     api.apply_str(container("box-1", 1)).await.unwrap();
     api.delete_object(&DeleteObject {
         namespace: None,
+        api_version: None,
         kind: "container".into(),
         name: "box-1".into(),
     })
@@ -360,7 +385,8 @@ async fn aliases_resolve_independently_for_multiple_kinds(pool: PgPool) -> sqlx:
 
     let backend = Arc::new(backend);
     let cache = Arc::new(DawnstoreCache::init(&*backend).await.unwrap());
-    let app = get_dawnstore_routes(backend, cache, vec![]);
+    let app = get_dawnstore_routes(backend, cache, vec![])
+        .layer(axum::middleware::from_fn(inject_superadmin));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base_url = format!("http://{}", listener.local_addr().unwrap());
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
@@ -821,7 +847,7 @@ async fn spawn_rbac_server(pool: PgPool) -> RbacTestServer {
     let app = dawnstore_core::rbac::with_jwt_auth(
         routes,
         keypair.public_key_pem.clone(),
-        Arc::clone(&cache),
+        Arc::clone(&backend),
     );
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -849,6 +875,8 @@ fn authz_is_superadmin_accepts_only_system_superadmin() {
         token_name: "bootstrap".into(),
         token_id: uuid::Uuid::new_v4(),
         exp: u64::MAX,
+        iss: "dawnstore".into(),
+        aud: "dawnstore".into(),
     };
     assert!(is_superadmin(&yes));
 
@@ -859,6 +887,8 @@ fn authz_is_superadmin_accepts_only_system_superadmin() {
             token_name: "t".into(),
             token_id: uuid::Uuid::new_v4(),
             exp: u64::MAX,
+            iss: "dawnstore".into(),
+            aud: "dawnstore".into(),
         };
         assert!(!is_superadmin(&no), "should not be superadmin: {sub}@{ns}");
     }
@@ -1463,6 +1493,79 @@ async fn rbac_unpermitted_sa_cannot_apply(pool: PgPool) -> sqlx::Result<()> {
     assert!(resp["data"].is_null(), "bob must not be able to apply: {resp}");
     assert!(!resp["error"].is_null(), "error must be set: {resp}");
     assert_eq!(resp["error"]["type"], "forbidden");
+
+    Ok(())
+}
+
+/// Regression: a role rule scoped to a specific `api_version` must NOT authorize
+/// operations on objects of a different version. The `container` schema is
+/// registered as `v2` here; a role scoped to `v1` must not permit applying,
+/// reading, or deleting the `v2` object, while a `v2`-scoped role must.
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn rbac_api_version_scoped_role_is_enforced(pool: PgPool) -> sqlx::Result<()> {
+    let server = spawn_rbac_server(pool).await;
+    let sa = server.bootstrap_token.clone();
+
+    // Namespace + service accounts.
+    http_apply(&server, &sa, serde_json::json!([
+        {"api_version": "v1", "kind": "namespace", "namespace": "system", "name": "vns"},
+        {"api_version": "v1", "kind": "serviceaccount", "namespace": "vns", "name": "v1user"},
+        {"api_version": "v1", "kind": "serviceaccount", "namespace": "vns", "name": "v2user"}
+    ])).await;
+
+    // v1user: role scoped to api_version "v1" (does NOT match the v2 container).
+    http_apply(&server, &sa, serde_json::json!({
+        "api_version": "v1", "kind": "role", "namespace": "vns", "name": "v1role",
+        "rules": [{"api_version": "v1", "kinds": ["container"], "verbs": ["get", "apply", "delete"]}]
+    })).await;
+    http_apply(&server, &sa, serde_json::json!({
+        "api_version": "v1", "kind": "rolebinding", "namespace": "vns", "name": "bind-v1user",
+        "role": "role/v1role", "subjects": ["serviceaccount/v1user"]
+    })).await;
+
+    // v2user: role scoped to api_version "v2" (matches the container).
+    http_apply(&server, &sa, serde_json::json!({
+        "api_version": "v1", "kind": "role", "namespace": "vns", "name": "v2role",
+        "rules": [{"api_version": "v2", "kinds": ["container"], "verbs": ["get", "apply", "delete"]}]
+    })).await;
+    http_apply(&server, &sa, serde_json::json!({
+        "api_version": "v1", "kind": "rolebinding", "namespace": "vns", "name": "bind-v2user",
+        "role": "role/v2role", "subjects": ["serviceaccount/v2user"]
+    })).await;
+
+    let v1_jwt = issue_jwt(&server, "vns", "v1user", "v1user-token").await;
+    let v2_jwt = issue_jwt(&server, "vns", "v2user", "v2user-token").await;
+
+    let v2_container = serde_json::json!({
+        "api_version": "v2", "kind": "container", "namespace": "vns", "name": "box1", "nr": 1
+    });
+
+    // v1-scoped role must NOT be able to apply the v2 object.
+    let denied = http_apply(&server, &v1_jwt, v2_container.clone()).await;
+    assert_eq!(denied["error"]["type"], "forbidden", "v1-scoped role must not apply a v2 object: {denied}");
+
+    // v2-scoped role can apply it.
+    let allowed = http_apply(&server, &v2_jwt, v2_container.clone()).await;
+    assert!(allowed["error"].is_null(), "v2-scoped role must apply the v2 object: {allowed}");
+
+    // v1-scoped role must NOT see the v2 object (get is version-filtered → empty).
+    let v1_get = http_get_objects(&server, &v1_jwt, serde_json::json!({
+        "namespace": "vns", "kind": "container"
+    })).await;
+    assert!(v1_get["error"].is_null(), "get should not hard-error: {v1_get}");
+    assert_eq!(v1_get["data"].as_array().unwrap().len(), 0, "v1-scoped role must not read v2 objects");
+
+    // v2-scoped role can see it.
+    let v2_get = http_get_objects(&server, &v2_jwt, serde_json::json!({
+        "namespace": "vns", "kind": "container"
+    })).await;
+    assert_eq!(v2_get["data"].as_array().unwrap().len(), 1, "v2-scoped role must read the v2 object");
+
+    // v1-scoped role must NOT be able to delete the v2 object (request pins api_version).
+    let del_denied = http_delete(&server, &v1_jwt, serde_json::json!({
+        "namespace": "vns", "api_version": "v2", "kind": "container", "name": "box1"
+    })).await;
+    assert_eq!(del_denied["error"]["type"], "forbidden", "v1-scoped role must not delete the v2 object: {del_denied}");
 
     Ok(())
 }
@@ -2665,6 +2768,7 @@ async fn delete_namespace_cascades_objects(pool: PgPool) -> sqlx::Result<()> {
     // Delete the namespace.
     api.delete_object(&DeleteObject {
         namespace: Some("system".into()),
+        api_version: None,
         kind: "namespace".into(),
         name: "myns".into(),
     })
@@ -2733,6 +2837,7 @@ async fn delete_namespace_blocked_by_cross_namespace_references(pool: PgPool) ->
     let result = api
         .delete_object(&DeleteObject {
             namespace: Some("system".into()),
+            api_version: None,
             kind: "namespace".into(),
             name: "ns-a".into(),
         })
@@ -2757,6 +2862,7 @@ async fn delete_namespace_blocked_by_cross_namespace_references(pool: PgPool) ->
     // After deleting ns-b (removing the cross-namespace reference), ns-a can be deleted.
     api.delete_object(&DeleteObject {
         namespace: Some("system".into()),
+        api_version: None,
         kind: "namespace".into(),
         name: "ns-b".into(),
     })
@@ -2765,6 +2871,7 @@ async fn delete_namespace_blocked_by_cross_namespace_references(pool: PgPool) ->
 
     api.delete_object(&DeleteObject {
         namespace: Some("system".into()),
+        api_version: None,
         kind: "namespace".into(),
         name: "ns-a".into(),
     })
@@ -2825,6 +2932,210 @@ async fn delete_namespace_revokes_tokens_in_that_namespace(pool: PgPool) -> sqlx
         .await
         .unwrap();
     assert_eq!(resp.status().as_u16(), 401, "alice JWT must be rejected after namespace deletion");
+
+    Ok(())
+}
+
+/// Regression: deleting an object in the `default` namespace must NOT delete
+/// objects of the same kind+name in other namespaces. Previously the postgres
+/// delete dropped the namespace predicate for the `default` namespace and wiped
+/// the object across every namespace.
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn delete_default_object_does_not_affect_other_namespaces(pool: PgPool) -> sqlx::Result<()> {
+    let api = spawn_server(pool).await;
+
+    // Create another namespace alongside the pre-seeded `default`.
+    api.apply_str(serde_json::to_string(&serde_json::json!({
+        "api_version": "v1", "kind": "namespace", "namespace": "system", "name": "other-ns",
+    }))
+    .unwrap())
+    .await
+    .unwrap();
+
+    // Two objects with the same kind+name in different namespaces.
+    api.apply_str(serde_json::to_string(&serde_json::json!({
+        "api_version": "v1", "kind": "container", "namespace": "default", "name": "dup", "nr": 1,
+    }))
+    .unwrap())
+    .await
+    .unwrap();
+    api.apply_str(serde_json::to_string(&serde_json::json!({
+        "api_version": "v1", "kind": "container", "namespace": "other-ns", "name": "dup", "nr": 2,
+    }))
+    .unwrap())
+    .await
+    .unwrap();
+
+    // Delete only the default-namespace object.
+    api.delete_object(&DeleteObject {
+        namespace: Some("default".into()),
+        api_version: None,
+        kind: "container".into(),
+        name: "dup".into(),
+    })
+    .await
+    .unwrap();
+
+    // The default one is gone.
+    let in_default = api
+        .get_objects(&GetObjectsFilter {
+            namespace: Some("default".into()),
+            kind: Some("container".into()),
+            name: Some("dup".into()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(in_default.len(), 0, "default/container/dup must be deleted");
+
+    // The other-namespace object must survive.
+    let in_other = api
+        .get_objects(&GetObjectsFilter {
+            namespace: Some("other-ns".into()),
+            kind: Some("container".into()),
+            name: Some("dup".into()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(in_other.len(), 1, "other-ns/container/dup must NOT be deleted");
+
+    Ok(())
+}
+
+/// Issuing a token whose `expires_at` exceeds the maximum lifetime is rejected.
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn issue_token_rejects_excessive_lifetime(pool: PgPool) -> sqlx::Result<()> {
+    let server = spawn_rbac_server(pool).await;
+
+    // 2 years out — beyond the 1-year cap.
+    let far_future = (chrono::Utc::now() + chrono::Duration::days(730)).to_rfc3339();
+    let resp: serde_json::Value = server
+        .api
+        .get_client()
+        .post(format!("{}/rbac/issue-token", server.api.get_base_url()))
+        .bearer_auth(&server.bootstrap_token)
+        .json(&serde_json::json!({
+            "namespace": "system",
+            "service_account": "superadmin",
+            "token_name": "too-long",
+            "expires_at": far_future
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    assert!(!resp["error"].is_null(), "token beyond max lifetime must be rejected: {resp}");
+    assert_eq!(resp["error"]["type"], "invalid_input");
+
+    Ok(())
+}
+
+/// Optimistic concurrency: applying with a stale `updated_at` precondition is
+/// rejected as a Conflict; applying with the current value succeeds.
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn apply_optimistic_concurrency_precondition(pool: PgPool) -> sqlx::Result<()> {
+    let api = spawn_server(pool).await;
+
+    // Create the object and capture its current updated_at.
+    let created = api.apply_str(container("occ", 1)).await.unwrap();
+    let current = created[0].updated_at;
+
+    // Apply with a stale precondition → must conflict.
+    let stale = serde_json::json!({
+        "api_version": "v1", "kind": "container", "namespace": "default",
+        "name": "occ", "nr": 2, "updated_at": "2000-01-01T00:00:00Z"
+    });
+    let err = api.apply_str(stale.to_string()).await.unwrap_err();
+    let dawnstore_client_lib::DawnstoreApiError::ServerError(e) = err else {
+        panic!("expected a server (conflict) error, got {err:?}");
+    };
+    assert!(
+        matches!(e, dawnstore_lib::DawnStoreApiError::Conflict { .. }),
+        "expected Conflict, got {e:?}"
+    );
+
+    // The object must be unchanged (nr still 1).
+    let unchanged = api
+        .get_objects(&GetObjectsFilter {
+            namespace: Some("default".into()),
+            kind: Some("container".into()),
+            name: Some("occ".into()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(unchanged[0].spec["nr"], 1, "stale apply must not have modified the object");
+
+    // Apply with the correct precondition → succeeds.
+    let good = serde_json::json!({
+        "api_version": "v1", "kind": "container", "namespace": "default",
+        "name": "occ", "nr": 3, "updated_at": current
+    });
+    api.apply_str(good.to_string()).await.unwrap();
+
+    Ok(())
+}
+
+/// The resource-definition endpoint only returns schemas the caller has a grant
+/// on; it does not leak the full catalogue to a narrowly-permitted caller.
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn resource_definitions_filtered_by_permission(pool: PgPool) -> sqlx::Result<()> {
+    let server = spawn_rbac_server(pool).await;
+
+    // alice gets a role granting access to `container` only.
+    let alice_jwt = setup_alice_with_editor_role(&server).await;
+
+    let resp: serde_json::Value = server
+        .api
+        .get_client()
+        .post(format!("{}/get-resource-definitions", server.api.get_base_url()))
+        .bearer_auth(&alice_jwt)
+        .json(&serde_json::json!({}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    let kinds: Vec<&str> = resp["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| d["kind"].as_str().unwrap())
+        .collect();
+
+    assert!(kinds.contains(&"container"), "alice must see the container schema: {kinds:?}");
+    assert!(!kinds.contains(&"role"), "alice must not see the role schema: {kinds:?}");
+    assert!(
+        !kinds.contains(&"serviceaccount"),
+        "alice must not see the serviceaccount schema: {kinds:?}"
+    );
+
+    // Superadmin still sees everything.
+    let su: serde_json::Value = server
+        .api
+        .get_client()
+        .post(format!("{}/get-resource-definitions", server.api.get_base_url()))
+        .bearer_auth(&server.bootstrap_token)
+        .json(&serde_json::json!({}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let su_kinds: Vec<&str> = su["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| d["kind"].as_str().unwrap())
+        .collect();
+    assert!(su_kinds.contains(&"role"), "superadmin must see all schemas");
 
     Ok(())
 }

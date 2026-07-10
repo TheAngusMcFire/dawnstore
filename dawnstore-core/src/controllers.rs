@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use axum::{
     Extension, Json, Router,
-    extract::State,
+    extract::{DefaultBodyLimit, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::{delete, post},
@@ -22,6 +22,13 @@ use crate::rbac::jwt_service;
 use crate::rbac::helpers::object_string_id;
 use crate::rbac::middleware::Claims;
 use crate::{handlers::apply, handlers::delete as delete_handler, handlers::get as get_handler};
+
+/// Maximum accepted request body size (4 MiB). Applied as an explicit
+/// [`DefaultBodyLimit`] layer rather than relying on the framework default.
+const MAX_BODY_BYTES: usize = 4 * 1024 * 1024;
+
+/// Maximum lifetime (in days) of an issued service-account token.
+const MAX_TOKEN_LIFETIME_DAYS: i64 = 365;
 
 // ── Error mapping ─────────────────────────────────────────────────────────────
 
@@ -96,6 +103,10 @@ fn to_api_error(err: DawnStoreError) -> DawnStoreApiError {
             message: e.to_string(),
         },
         DawnStoreError::Forbidden => DawnStoreApiError::Forbidden,
+        DawnStoreError::InvalidInput(message) => DawnStoreApiError::InvalidInput { message },
+        DawnStoreError::Conflict { target, message } => DawnStoreApiError::Conflict {
+            message: format!("{target}: {message}"),
+        },
         DawnStoreError::DeleteBlockedByReferences { target, referencing } => {
             DawnStoreApiError::ValidationError {
                 name: target,
@@ -171,6 +182,10 @@ where
         .route("/get-resource-definitions", post(get_resource_definitions_handler::<B>))
         .route("/delete-object", delete(delete_object_handler::<B>))
         .route("/rbac/issue-token", post(issue_token::<B>))
+        // Explicit request body cap. Bounds memory use of the JSON deserializer
+        // (`/apply` accepts arbitrary specs). Tune `MAX_BODY_BYTES` if legitimate
+        // apply payloads are larger.
+        .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .with_state(ApiState { backend, cache, private_key_pem })
 }
 
@@ -207,7 +222,7 @@ async fn check_namespace_restriction_cached(
 
 async fn apply_handler<B>(
     State(state): State<ApiState<B>>,
-    claims_ext: Option<Extension<Claims>>,
+    Extension(claims): Extension<Claims>,
     Json(obj): Json<serde_json::Value>,
 ) -> Response
 where
@@ -216,8 +231,7 @@ where
     if let Err(e) = check_namespace_restriction_cached(&*state.cache, &obj).await {
         return api_err(e);
     }
-    let caller = claims_ext.map(|e| e.0);
-    match apply::apply(&*state.backend, &*state.cache, caller.as_ref(), obj).await {
+    match apply::apply(&*state.backend, &*state.cache, Some(&claims), obj).await {
         Ok(applied) => ok(applied),
         Err(e) => api_err(e),
     }
@@ -225,7 +239,7 @@ where
 
 async fn get_objects_handler<B>(
     State(state): State<ApiState<B>>,
-    claims_ext: Option<Extension<Claims>>,
+    Extension(claims): Extension<Claims>,
     Json(mut filter): Json<GetObjectsFilter>,
 ) -> Response
 where
@@ -241,8 +255,7 @@ where
             }
         }
     }
-    let caller = claims_ext.map(|e| e.0);
-    match get_handler::get(&*state.backend, &*state.cache, caller.as_ref(), filter).await {
+    match get_handler::get(&*state.backend, &*state.cache, Some(&claims), filter).await {
         Ok(x) => ok(x),
         Err(e) => api_err(e),
     }
@@ -250,14 +263,13 @@ where
 
 async fn delete_object_handler<B>(
     State(state): State<ApiState<B>>,
-    claims_ext: Option<Extension<Claims>>,
+    Extension(claims): Extension<Claims>,
     Json(query): Json<DeleteObject>,
 ) -> Response
 where
     B: DawnstoreBackend + 'static,
 {
-    let caller = claims_ext.map(|e| e.0);
-    match delete_handler::delete(&*state.backend, &*state.cache, caller.as_ref(), query).await {
+    match delete_handler::delete(&*state.backend, &*state.cache, Some(&claims), query).await {
         Ok(()) => ok(true),
         Err(e) => api_err(e),
     }
@@ -265,13 +277,19 @@ where
 
 async fn get_resource_definitions_handler<B>(
     State(state): State<ApiState<B>>,
+    Extension(claims): Extension<Claims>,
     Json(_query): Json<GetResourceDefinitionFilter>,
 ) -> Response
 where
     B: DawnstoreBackend + 'static,
 {
-    match state.backend.get_resource_definitions().await {
-        Ok(x) => ok(x),
+    let defs = match state.backend.get_resource_definitions().await {
+        Ok(x) => x,
+        Err(e) => return api_err(e),
+    };
+    match get_handler::filter_resource_definitions(&state.cache, &*state.backend, &claims, defs).await
+    {
+        Ok(filtered) => ok(filtered),
         Err(e) => api_err(e),
     }
 }
@@ -304,9 +322,23 @@ async fn issue_token<B: DawnstoreBackend + 'static>(
         return api_err(DawnStoreError::InvalidObjectName(req.service_account.clone()));
     }
 
+    let now = Utc::now();
     let expires_at = req
         .expires_at
-        .unwrap_or_else(|| Utc::now() + Duration::days(365));
+        .unwrap_or_else(|| now + Duration::days(MAX_TOKEN_LIFETIME_DAYS));
+
+    // Enforce a maximum token lifetime. Reject an expiry in the past or beyond
+    // the cap so callers cannot mint effectively non-expiring credentials.
+    if expires_at <= now {
+        return api_err(DawnStoreError::InvalidInput(
+            "expires_at must be in the future".to_string(),
+        ));
+    }
+    if expires_at > now + Duration::days(MAX_TOKEN_LIFETIME_DAYS) {
+        return api_err(DawnStoreError::InvalidInput(format!(
+            "expires_at exceeds the maximum token lifetime of {MAX_TOKEN_LIFETIME_DAYS} days"
+        )));
+    }
 
     let sa_ref = object_string_id(&req.namespace, KIND_SERVICE_ACCOUNT, &req.service_account);
 
@@ -372,9 +404,8 @@ async fn issue_token<B: DawnstoreBackend + 'static>(
         Err(e) => return api_err(crate::error::DawnStoreError::JwtError(e)),
     };
 
-    // Register the new token so it is immediately usable without waiting for a
-    // cache rebuild, and so it can be revoked by deleting the object.
-    state.cache.add_token(token_id);
-
+    // No token cache to update: the middleware validates each request's token
+    // against the backend, so this token is usable immediately and revoked as
+    // soon as its object is deleted.
     ok(IssueTokenResponse { token, token_id, expires_at })
 }

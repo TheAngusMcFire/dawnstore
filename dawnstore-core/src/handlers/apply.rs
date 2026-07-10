@@ -79,14 +79,11 @@ fn has_permission(
     verb: Verb,
     caller_namespace: &str,
     target_namespace: &str,
+    api_version: &str,
     kind: &str,
     name: &str,
 ) -> bool {
-    let check = |scope: &GrantedScope| {
-        scope.verbs.contains(&verb)
-            && scope.kinds.iter().any(|k| k == "*" || k == kind)
-            && scope.names.as_ref().map_or(true, |names| names.iter().any(|n| n == name))
-    };
+    let check = |scope: &GrantedScope| scope.matches(verb, api_version, kind, name);
     (caller_namespace == target_namespace && perms.namespaced.iter().any(check))
         || perms.global.iter().any(check)
 }
@@ -125,6 +122,7 @@ async fn check_permission<B: DawnstoreBackend>(
     caller: Option<&Claims>,
     verb: Verb,
     namespace: &str,
+    api_version: &str,
     kind: &str,
     name: &str,
 ) -> Result<(), DawnStoreError> {
@@ -135,7 +133,7 @@ async fn check_permission<B: DawnstoreBackend>(
         return Ok(()); // superadmin bypasses all permission checks
     }
     let perms = get_or_load_permissions(cache, backend, caller).await?;
-    if has_permission(&perms, verb, &caller.namespace, namespace, kind, name) {
+    if has_permission(&perms, verb, &caller.namespace, namespace, api_version, kind, name) {
         Ok(())
     } else {
         Err(DawnStoreError::Forbidden)
@@ -513,12 +511,17 @@ async fn walk_foreign_key_graph<B: DawnstoreBackend>(
                 };
 
                 // Permission check: caller must have Get on the FK target.
+                // FK targets are identified by namespace/kind/name only — the
+                // target's api_version is not known until it is fetched (which
+                // happens after this check to avoid leaking existence), so we
+                // match against any api_version ("*") for this Get check.
                 check_permission(
                     cache,
                     backend,
                     caller,
                     Verb::Get,
                     target_ns,
+                    "*",
                     target_kind,
                     target_name,
                 )
@@ -876,10 +879,39 @@ pub async fn apply<B: DawnstoreBackend>(
             obj.api_version.as_deref().ok_or(DawnStoreError::ApiVersionMissingInObject)?;
 
         // Step 5: permission check (Apply) — fail fast before any heavier work.
-        check_permission(cache, backend, caller, Verb::Apply, namespace, kind, &obj.name).await?;
+        check_permission(cache, backend, caller, Verb::Apply, namespace, api_version, kind, &obj.name).await?;
 
         // Step 6: schema validation against the cached JSON schema validator.
         validate_schema(cache, api_version, kind, &obj.name, &obj.spec).await?;
+    }
+
+    // Step 6b: optimistic-concurrency precondition. When a caller includes
+    // `updated_at` on an object (echoing the value a prior GET returned), the
+    // stored object must currently have exactly that `updated_at`; otherwise the
+    // apply is rejected with a Conflict. This turns silent last-write-wins into a
+    // detected conflict for read-modify-write flows. Objects without `updated_at`
+    // are unaffected. Best-effort: a small window exists between this check and
+    // the upsert below.
+    for obj in &objects {
+        let Some(expected) = obj.updated_at else { continue };
+        let namespace = obj.namespace.as_deref().unwrap_or("default");
+        let kind = obj.kind.as_deref().ok_or(DawnStoreError::KindMissingInObject)?;
+        let target = object_string_id(namespace, kind, &obj.name);
+        match backend.get_object(namespace, kind, &obj.name).await? {
+            Some(existing) if existing.updated_at == expected => {}
+            Some(_) => {
+                return Err(DawnStoreError::Conflict {
+                    target,
+                    message: "object was modified since it was last read".to_string(),
+                });
+            }
+            None => {
+                return Err(DawnStoreError::Conflict {
+                    target,
+                    message: "object no longer exists".to_string(),
+                });
+            }
+        }
     }
 
     // Step 7: privilege-escalation check — reject if any RBAC object in the batch

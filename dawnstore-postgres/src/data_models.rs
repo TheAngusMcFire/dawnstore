@@ -59,12 +59,3 @@ pub struct Relation {
     pub foreign_object_id: Uuid,
     pub foreign_key_id: Uuid,
 }
-
-#[derive(FromRow, serde::Deserialize, serde::Serialize)]
-pub struct ApiObjectInfo {
-    pub namespace: String,
-    pub id: Uuid,
-    pub api_version: String,
-    pub kind: String,
-    pub name: String,
-}

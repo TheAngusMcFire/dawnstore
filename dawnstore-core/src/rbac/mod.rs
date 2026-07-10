@@ -186,12 +186,13 @@ pub async fn bootstrap<B: DawnstoreBackend>(
 /// Wrap `router` with JWT authentication middleware.
 ///
 /// `public_key_pem` is the PEM-encoded EC public key used to verify tokens.
-/// `cache` is used to check whether each incoming token has been revoked.
-pub fn with_jwt_auth(
+/// `backend` is queried on every request to check whether the token's backing
+/// `ServiceAccountToken` object still exists (revocation is DB-backed, not cached).
+pub fn with_jwt_auth<B: DawnstoreBackend + 'static>(
     router: Router,
     public_key_pem: Vec<u8>,
-    cache: Arc<crate::cache::DawnstoreCache>,
+    backend: Arc<B>,
 ) -> Router {
-    let state = JwtAuthState { public_key_pem, cache };
-    router.layer(from_fn_with_state(state, jwt_auth_middleware))
+    let state = JwtAuthState { public_key_pem, backend };
+    router.layer(from_fn_with_state(state, jwt_auth_middleware::<B>))
 }

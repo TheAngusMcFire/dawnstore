@@ -84,6 +84,10 @@ pub enum DawnStoreError {
     NamespaceCanOnlyBeCreatedInSystemNamespace(String),
     #[error("Forbidden")]
     Forbidden,
+    #[error("Invalid input: {0}")]
+    InvalidInput(String),
+    #[error("Conflict on '{target}': {message}")]
+    Conflict { target: String, message: String },
     #[error("Cannot delete object '{target}': still referenced by: {referencing}")]
     DeleteBlockedByReferences { target: String, referencing: String },
     #[error("Object name '{0}' contains '/'; use '-' or another separator instead")]

@@ -49,7 +49,7 @@ pub async fn run(
             }
 
             Command::Delete { namespace, kind, name } => {
-                let req = DeleteObject { namespace: Some(namespace), kind, name: name.clone() };
+                let req = DeleteObject { namespace: Some(namespace), api_version: None, kind, name: name.clone() };
                 match api.delete_object(&req).await {
                     Ok(()) => {
                         info!(name, "deleted");

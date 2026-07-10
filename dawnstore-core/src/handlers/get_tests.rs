@@ -257,6 +257,8 @@ mod tests {
             token_name: "bootstrap".to_string(),
             token_id: Uuid::new_v4(),
             exp: u64::MAX,
+            iss: "dawnstore".to_string(),
+            aud: "dawnstore".to_string(),
         };
 
         let result = get(&backend, &cache, Some(&caller), filter_kind("Car")).await.unwrap();

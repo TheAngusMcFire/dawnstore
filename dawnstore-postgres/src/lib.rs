@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use chrono::Utc;
+use chrono::{SubsecRound, Utc};
 use serde_json::Value;
 use sqlx::{PgPool, Pool, Postgres, migrate::MigrateError};
 use uuid::Uuid;
@@ -164,7 +164,11 @@ impl DawnstoreBackend for PostgresBackend {
                     .collect();
 
             // Build Object records, preserving existing UUIDs on update.
-            let now = Utc::now();
+            // Truncate to microseconds so the timestamp we return matches what
+            // Postgres (timestamptz, microsecond precision) actually stores —
+            // this keeps `updated_at` usable as an optimistic-concurrency token
+            // whether the client echoes it from an apply response or a GET.
+            let now = Utc::now().trunc_subsecs(6);
             let mut database_objects: Vec<data_models::Object> =
                 Vec::with_capacity(objects_with_sid.len());
             for (sid, obj) in objects_with_sid {
@@ -269,12 +273,12 @@ impl DawnstoreBackend for PostgresBackend {
         name: &str,
     ) -> impl std::future::Future<Output = Result<(), DawnStoreError>> + Send {
         let pool = self.pool.clone();
-        let ns = if namespace == "default" { None } else { Some(namespace.to_string()) };
+        let ns = namespace.to_string();
         let kind = kind.to_string();
         let name = name.to_string();
         async move {
             let mut con = pool.acquire().await?;
-            queries::delete_object(con.as_mut(), ns.as_deref(), &name, &kind).await?;
+            queries::delete_object(con.as_mut(), &ns, &name, &kind).await?;
             Ok(())
         }
     }
@@ -464,6 +468,7 @@ impl PostgresBackend {
                 .filter(|o| {
                     scopes.iter().any(|scope| {
                         scope.namespace.as_deref().map_or(true, |ns| ns == o.namespace)
+                            && (scope.api_version == "*" || scope.api_version == o.api_version)
                             && (scope.kind == "*" || scope.kind == o.kind)
                             && scope
                                 .names

@@ -6,7 +6,7 @@ use crate::error::DawnStoreError;
 use crate::cache::{EffectivePermissions, Verb, is_superadmin};
 use crate::rbac::constants::{
     KIND_GLOBAL_ROLE, KIND_GLOBAL_ROLE_BINDING, KIND_NAMESPACE, KIND_ROLE, KIND_ROLE_BINDING,
-    KIND_SERVICE_ACCOUNT, KIND_SERVICE_ACCOUNT_TOKEN,
+    KIND_SERVICE_ACCOUNT,
 };
 use crate::rbac::helpers::object_string_id;
 use crate::rbac::middleware::Claims;
@@ -53,6 +53,7 @@ async fn check_delete_permission<B: DawnstoreBackend>(
     backend: &B,
     caller: Option<&Claims>,
     namespace: &str,
+    api_version: Option<&str>,
     kind: &str,
     name: &str,
 ) -> Result<(), DawnStoreError> {
@@ -65,15 +66,19 @@ async fn check_delete_permission<B: DawnstoreBackend>(
 
     let perms = get_or_load_permissions(cache, backend, caller).await?;
 
-    let verb_kind_name = |scope: &crate::cache::GrantedScope| {
+    // When the request specifies an api_version, a version-scoped grant must match
+    // it; when it is omitted (`None`) the object is identified by kind/name alone
+    // and version is not constrained.
+    let matches = |scope: &crate::cache::GrantedScope| {
         scope.verbs.contains(&Verb::Delete)
+            && api_version.map_or(true, |av| scope.api_version == "*" || scope.api_version == av)
             && scope.kinds.iter().any(|k| k == "*" || k == kind)
             && scope.names.as_ref().map_or(true, |names| names.iter().any(|n| n == name))
     };
 
     // Namespace-scoped grants are only valid within the caller's own namespace.
-    let allowed = (caller.namespace == namespace && perms.namespaced.iter().any(verb_kind_name))
-        || perms.global.iter().any(verb_kind_name);
+    let allowed = (caller.namespace == namespace && perms.namespaced.iter().any(matches))
+        || perms.global.iter().any(matches);
 
     if allowed {
         Ok(())
@@ -86,12 +91,6 @@ async fn check_delete_permission<B: DawnstoreBackend>(
 /// permission-cache invalidation.
 fn is_rbac_kind(kind: &str) -> bool {
     matches!(kind, KIND_ROLE | KIND_GLOBAL_ROLE | KIND_ROLE_BINDING | KIND_GLOBAL_ROLE_BINDING)
-}
-
-/// Returns `true` if `kind` is a `ServiceAccountToken` whose deletion must
-/// revoke the corresponding JWT from the token-validity cache.
-fn is_token_kind(kind: &str) -> bool {
-    kind == KIND_SERVICE_ACCOUNT_TOKEN
 }
 
 /// Returns `true` if `kind` is a `ServiceAccount` whose deletion must evict
@@ -128,7 +127,16 @@ pub async fn delete<B: DawnstoreBackend>(
     let namespace = request.namespace.as_deref().unwrap_or("default");
 
     // Step 2: permission check.
-    check_delete_permission(cache, backend, caller, namespace, &kind, &request.name).await?;
+    check_delete_permission(
+        cache,
+        backend,
+        caller,
+        namespace,
+        request.api_version.as_deref(),
+        &kind,
+        &request.name,
+    )
+    .await?;
 
     // Step 3: reject if other objects still reference this one via FK relations.
     let refs = backend.get_inbound_references(namespace, &kind, &request.name).await?;
@@ -150,19 +158,9 @@ pub async fn delete<B: DawnstoreBackend>(
                 referencing: cross_refs.join(", "),
             });
         }
-        // Revoke all tokens in the namespace before cascade-deleting them so
-        // that JWTs derived from those tokens are rejected by the middleware
-        // immediately rather than remaining valid until expiry.
-        let tokens = backend
-            .get_objects(&crate::abstractions::BackendGetObjectsFilter {
-                namespace: Some(request.name.clone()),
-                kind: Some(KIND_SERVICE_ACCOUNT_TOKEN.to_string()),
-                ..Default::default()
-            })
-            .await?;
-        for token in &tokens {
-            cache.remove_token(token.id);
-        }
+        // Deleting the token objects (below) revokes their JWTs automatically:
+        // the auth middleware validates every request's token against the
+        // backend, so a deleted `ServiceAccountToken` is rejected immediately.
 
         // Delete all objects inside the namespace (relations cascade via FK).
         backend.delete_objects_by_namespace(&request.name).await?;
@@ -170,28 +168,17 @@ pub async fn delete<B: DawnstoreBackend>(
         cache.clear_all_permissions();
     }
 
-    // Step 4: if this is a ServiceAccountToken, fetch its UUID before deletion
-    // so we can revoke the corresponding JWT from the token-validity cache.
-    let token_id_to_revoke = if is_token_kind(&kind) {
-        backend.get_object(namespace, &kind, &request.name).await?.map(|o| o.id)
-    } else {
-        None
-    };
-
-    // Step 5: delete from backend.
+    // Step 4: delete from backend. A deleted `ServiceAccountToken` is revoked
+    // automatically — the middleware checks token existence against the backend
+    // on every request, so no cache eviction is needed here.
     backend.delete_object(namespace, &kind, &request.name).await?;
 
-    // Step 6: invalidate RBAC cache for deleted RBAC resources.
+    // Step 5: invalidate RBAC cache for deleted RBAC resources.
     if is_rbac_kind(&kind) {
         cache.invalidate_permissions(&object_string_id(namespace, &kind, &request.name));
     }
 
-    // Step 7: revoke the JWT for a deleted ServiceAccountToken.
-    if let Some(token_id) = token_id_to_revoke {
-        cache.remove_token(token_id);
-    }
-
-    // Step 8: evict the permission cache entry for a deleted ServiceAccount so
+    // Step 6: evict the permission cache entry for a deleted ServiceAccount so
     // that re-creating an SA with the same (namespace, name) does not inherit
     // stale grants from the old identity.
     if is_service_account_kind(&kind) {

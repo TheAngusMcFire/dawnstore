@@ -1,4 +1,4 @@
-use dawnstore_lib::{AllowedScope, GetObjectsFilter, ReturnObject};
+use dawnstore_lib::{AllowedScope, GetObjectsFilter, ResourceDefinition, ReturnObject};
 
 use crate::abstractions::{BackendGetObjectsFilter, DawnstoreBackend};
 use crate::cache::DawnstoreCache;
@@ -77,10 +77,37 @@ fn add_get_scopes(grant: &GrantedScope, namespace: Option<String>, out: &mut Vec
     for kind in &grant.kinds {
         out.push(AllowedScope {
             namespace: namespace.clone(),
+            api_version: grant.api_version.clone(),
             kind: kind.clone(),
             names: grant.names.clone(),
         });
     }
+}
+
+/// Restrict a list of resource definitions to those the caller may see.
+///
+/// A caller may see a definition `(api_version, kind)` if they hold *any* verb
+/// on it via a namespaced or global grant. The superadmin sees all. This stops
+/// the resource-definition endpoint from leaking the full schema catalogue to
+/// callers with narrow grants.
+pub async fn filter_resource_definitions<B: DawnstoreBackend>(
+    cache: &DawnstoreCache,
+    backend: &B,
+    caller: &Claims,
+    defs: Vec<ResourceDefinition>,
+) -> Result<Vec<ResourceDefinition>, DawnStoreError> {
+    if is_superadmin(caller) {
+        return Ok(defs);
+    }
+    let perms = get_or_load_permissions(cache, backend, caller).await?;
+    let visible = |def: &ResourceDefinition| {
+        let covers = |s: &GrantedScope| {
+            (s.api_version == "*" || s.api_version == def.api_version)
+                && s.kinds.iter().any(|k| k == "*" || k == &def.kind)
+        };
+        perms.namespaced.iter().any(covers) || perms.global.iter().any(covers)
+    };
+    Ok(defs.into_iter().filter(|d| visible(d)).collect())
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────

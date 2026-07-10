@@ -17,6 +17,9 @@ pub enum DawnStoreApiError {
     ValidationError { name: String, message: String },
     ForeignKeyNotFound { value: String },
     InvalidInput { message: String },
+    /// An optimistic-concurrency precondition failed: the object was modified
+    /// (or created/deleted) since the caller last read it.
+    Conflict { message: String },
     Forbidden,
     InternalError,
 }
@@ -112,6 +115,8 @@ fn is_none_or_empty(v: &Option<BTreeMap<String, String>>) -> bool {
 pub struct AllowedScope {
     /// `None` means any namespace (global grant).
     pub namespace: Option<String>,
+    /// `"*"` matches all api versions.
+    pub api_version: String,
     /// `"*"` matches all kinds.
     pub kind: String,
     /// `None` means all names in this (namespace, kind) are permitted.
@@ -144,6 +149,11 @@ pub struct ListOfObjects {
 #[derive(serde::Deserialize, serde::Serialize, Clone)]
 pub struct DeleteObject {
     pub namespace: Option<String>,
+    /// Optional api version of the target. `None` matches any version — used
+    /// only to scope the RBAC delete-permission check; the object itself is
+    /// identified by `(namespace, kind, name)`.
+    #[serde(default)]
+    pub api_version: Option<String>,
     pub kind: String,
     pub name: String,
 }

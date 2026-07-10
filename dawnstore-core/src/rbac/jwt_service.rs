@@ -8,6 +8,11 @@ use uuid::Uuid;
 
 // ── Claims ────────────────────────────────────────────────────────────────────
 
+/// Fixed `iss` (issuer) claim. Tokens minted for a different issuer are rejected.
+pub const JWT_ISSUER: &str = "dawnstore";
+/// Fixed `aud` (audience) claim. Tokens minted for a different audience are rejected.
+pub const JWT_AUDIENCE: &str = "dawnstore";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Claims {
     /// ServiceAccount name.
@@ -17,6 +22,10 @@ pub struct Claims {
     pub token_id: Uuid,
     /// Unix timestamp (seconds).
     pub exp: u64,
+    /// Issuer — always [`JWT_ISSUER`].
+    pub iss: String,
+    /// Audience — always [`JWT_AUDIENCE`].
+    pub aud: String,
 }
 
 // ── Key pair ──────────────────────────────────────────────────────────────────
@@ -71,6 +80,8 @@ pub fn create_token(
         token_name: token_name.to_string(),
         token_id,
         exp: expires_at.timestamp() as u64,
+        iss: JWT_ISSUER.to_string(),
+        aud: JWT_AUDIENCE.to_string(),
     };
     Ok(encode(
         &Header::new(Algorithm::ES384),
@@ -85,6 +96,8 @@ pub fn create_token(
 pub fn validate_token(token: &str, public_key_pem: &[u8]) -> Result<Claims, JwtError> {
     let mut validation = Validation::new(Algorithm::ES384);
     validation.validate_exp = true;
+    validation.set_issuer(&[JWT_ISSUER]);
+    validation.set_audience(&[JWT_AUDIENCE]);
     Ok(decode::<Claims>(
         token,
         &DecodingKey::from_ec_pem(public_key_pem)?,

@@ -1,8 +1,7 @@
 #![allow(dead_code)]
 use sqlx::{PgConnection, QueryBuilder};
 
-use super::data_models::{ApiObjectInfo, ForeignKeyConstraint, Object, ObjectInfo, ObjectSchema, Relation};
-use dawnstore_lib::*;
+use super::data_models::{ForeignKeyConstraint, Object, ObjectInfo, ObjectSchema, Relation};
 use dawnstore_core::abstractions::{BackendGetObjectsFilter, ForeignKeyBehaviour, ForeignKeyType};
 
 use sqlx::{PgPool, Result};
@@ -192,6 +191,11 @@ pub async fn get_objects_by_filter(pool: &mut PgConnection, filter: &BackendGetO
                     query_builder.push_bind(ns);
                     query_builder.push(" and ");
                 }
+                if scope.api_version != "*" {
+                    query_builder.push("api_version = ");
+                    query_builder.push_bind(&scope.api_version);
+                    query_builder.push(" and ");
+                }
                 if scope.kind == "*" {
                     query_builder.push("true");
                 } else {
@@ -220,8 +224,11 @@ pub async fn get_objects_by_filter(pool: &mut PgConnection, filter: &BackendGetO
 
     if let Some(x) = &filter.page {
         let size = filter.page_size.unwrap_or(250);
+        // Saturate rather than overflow-wrap into a negative offset for absurd
+        // page numbers (which would otherwise produce a DB error).
+        let offset = x.saturating_mul(size).min(i64::MAX as usize) as i64;
         query_builder.push(" offset ");
-        query_builder.push_bind((x * size) as i64);
+        query_builder.push_bind(offset);
     }
 
     query_builder.build_query_as::<Object>().fetch_all(pool).await
@@ -231,49 +238,6 @@ pub async fn get_object_infos(pool: &mut PgConnection, string_ids: &[String]) ->
     sqlx::query_as!(ObjectInfo, "SELECT id, string_id, created_at FROM objects WHERE string_id = ANY($1)", string_ids)
         .fetch_all(pool)
         .await
-}
-
-pub async fn get_api_object_infos_with_filter(pool: &mut PgConnection, filter: &GetObjectInfosFilter) -> Result<Vec<ApiObjectInfo>, sqlx::Error> {
-    let mut query_builder: sqlx::QueryBuilder<sqlx::Postgres> = sqlx::QueryBuilder::new(
-        "SELECT namespace, id, api_version, name, kind where true "
-    );
-
-    if let Some(x) = &filter.namespace {
-        query_builder.push(" and namespace = ");
-        query_builder.push_bind(x);
-    }
-
-    if let Some(x) = &filter.kind {
-        query_builder.push(" and kind = ");
-        query_builder.push_bind(x);
-    }
-
-    if let Some(x) = &filter.name {
-        query_builder.push(" and name = ");
-        query_builder.push_bind(x);
-    }
-
-    if let Some(x) = &filter.name_search_string {
-        query_builder.push(" and name ilike '%");
-        query_builder.push_bind(x);
-        query_builder.push("%' ");
-    }
-
-    query_builder.push(" order by kind, name ");
-
-    if let Some(x) = &filter.page_size {
-        let size = (*x).min(250);
-        query_builder.push(" limit ");
-        query_builder.push_bind(size as i64);
-    }
-
-    if let Some(x) = &filter.page {
-        let size = filter.page_size.unwrap_or(250);
-        query_builder.push(" offset ");
-        query_builder.push_bind((x * size) as i64);
-    }
-
-    query_builder.build_query_as::<ApiObjectInfo>().fetch_all(pool).await
 }
 
 /// Return the string IDs of all objects that have an inbound FK relation to the
@@ -298,13 +262,13 @@ pub async fn get_objects_referencing(
     .await
 }
 
-pub async fn delete_object(pool: &mut PgConnection, namespace: Option<&str>, name: &str, kind: &str) -> Result<(), sqlx::Error> {
+pub async fn delete_object(pool: &mut PgConnection, namespace: &str, name: &str, kind: &str) -> Result<(), sqlx::Error> {
     let mut qb = QueryBuilder::<sqlx::Postgres>::new("DELETE FROM objects WHERE name = ");
-    qb.push_bind(name).push(" and kind = ").push_bind(kind);
-    if let Some(ns) = namespace {
-        qb.push(" and namespace = ");
-        qb.push_bind(ns);
-    }
+    qb.push_bind(name)
+        .push(" and kind = ")
+        .push_bind(kind)
+        .push(" and namespace = ")
+        .push_bind(namespace);
     qb.build().execute(pool).await?;
     Ok(())
 }

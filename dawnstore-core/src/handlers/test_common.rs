@@ -263,6 +263,8 @@ pub fn make_claims(namespace: &str, sa_name: &str) -> Claims {
         token_name: "test-token".to_string(),
         token_id: Uuid::new_v4(),
         exp: u64::MAX,
+        iss: "dawnstore".to_string(),
+        aud: "dawnstore".to_string(),
     }
 }
 

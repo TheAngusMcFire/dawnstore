@@ -1,12 +1,15 @@
+use std::net::SocketAddr;
 use std::sync::Arc;
 
+use axum::{Router, http::StatusCode, routing::get};
 use base64::prelude::*;
 use color_eyre::eyre;
-use dawnstore_core::abstractions::{ForeignKey, ForeignKeyBehaviour, ForeignKeyType};
+use dawnstore_core::abstractions::{DawnstoreBackend, ForeignKey, ForeignKeyBehaviour, ForeignKeyType};
 use dawnstore_core::cache::DawnstoreCache;
 use dawnstore_core::controllers::get_dawnstore_routes;
 use dawnstore_postgres::PostgresBackend;
 use tokio::net::TcpListener;
+use tower::limit::GlobalConcurrencyLimitLayer;
 
 mod models;
 use models::{Container, Deployment, Environment, Project, Secret, Team};
@@ -148,12 +151,53 @@ async fn main() -> eyre::Result<()> {
 
     let routes = get_dawnstore_routes(Arc::clone(&backend), Arc::clone(&cache), private_key_pem);
 
-    let app = dawnstore_core::rbac::with_jwt_auth(routes, public_key_pem, Arc::clone(&cache));
+    // Authenticated API, with a global cap on concurrent in-flight requests so a
+    // burst cannot exhaust the DB connection pool.
+    let api = dawnstore_core::rbac::with_jwt_auth(routes, public_key_pem, Arc::clone(&backend))
+        .layer(GlobalConcurrencyLimitLayer::new(MAX_CONCURRENT_REQUESTS));
 
-    let listener = TcpListener::bind("::0:8080").await.unwrap();
-    tracing::info!("listening on {}", listener.local_addr().unwrap());
-    axum::serve(listener, app).await?;
+    // Unauthenticated liveness/readiness probes (mounted outside the JWT layer).
+    let health = Router::new()
+        .route("/healthz", get(|| async { StatusCode::OK }))
+        .route("/readyz", get(readyz))
+        .with_state(Arc::clone(&backend));
+
+    let app = health.merge(api);
+
+    let addr: SocketAddr = "[::]:8080".parse().unwrap();
+
+    // Optional in-process TLS: if both key/cert env vars are set, serve HTTPS;
+    // otherwise plain HTTP (terminate TLS at a proxy in that case).
+    match (std::env::var("TLS_CERT_PEM_B64"), std::env::var("TLS_KEY_PEM_B64")) {
+        (Ok(cert_b64), Ok(key_b64)) => {
+            // rustls 0.23 needs a process-wide crypto provider installed.
+            let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+            let cert = BASE64_STANDARD.decode(cert_b64.trim())?;
+            let key = BASE64_STANDARD.decode(key_b64.trim())?;
+            let config = axum_server::tls_rustls::RustlsConfig::from_pem(cert, key).await?;
+            tracing::info!("listening on https://{addr}");
+            axum_server::bind_rustls(addr, config)
+                .serve(app.into_make_service())
+                .await?;
+        }
+        _ => {
+            let listener = TcpListener::bind(addr).await.unwrap();
+            tracing::info!("listening on http://{}", listener.local_addr().unwrap());
+            axum::serve(listener, app).await?;
+        }
+    }
     Ok(())
+}
+
+/// Maximum number of concurrent in-flight requests to the authenticated API.
+const MAX_CONCURRENT_REQUESTS: usize = 1024;
+
+/// Readiness probe: reports 200 only when the backend is reachable.
+async fn readyz(axum::extract::State(backend): axum::extract::State<Arc<PostgresBackend>>) -> StatusCode {
+    match backend.get_resource_definitions().await {
+        Ok(_) => StatusCode::OK,
+        Err(_) => StatusCode::SERVICE_UNAVAILABLE,
+    }
 }
 
 /// Decode a base64-encoded PEM key from an environment variable.
